@@ -1,3 +1,37 @@
+Version 3.1.1.30/2.8.3.30/2.7.2.30
+
+修复问题：
+1. 【功能】OBSFileSystem.java中接口getFileStatus、copyFile、listObjects、continueListObjects增加异常重试逻辑
+2. 【功能】OBSFileSystem.java中renameFolder中删除源目录实现由异步删除为批删
+3. 【功能】OBSInputStream.java中read相关的3个接口增加异常重试逻辑
+4. 【功能】对象桶getContentSummary性能优化
+5. 【功能】支持uper jar包编译
+6. 【用例】
+   （1）增加getContentSummary用例
+   （2）增加重试接口mock用例
+
+
+=========================================================================
+
+Version 3.1.1.29/2.8.3.27/2.7.2.29
+
+修复问题：
+1. 【功能】修改fs.obs.readahead.range默认值为1MB；
+2. 【功能】当fs.obs.fast.upload.buffer为array时，申请的第一个block的大小默认修改为1MB，加了参数fs.obs.fast.upload.array.first.buffer;
+3. 【功能】OBSBlockOutputStream增加多段上传过程中异常快速抛出，异常后，write、close都抛异常;
+4. 【功能】OBSInputStream在seekInStream方法中，incrementBytesRead修改读取数据的值为真实skipped的字节数;
+5. 【功能】fs.obs.connection.establish.timeout和fs.obs.connection.timeout默认值修改为120S
+6. 【功能】修改deleteObejcts()接口，批删失败转单点删除，单点删除失败重试3次；
+7. 【功能】修改批删触发条件，当开启enableMultiObjectsDelete开关，并且删除对象数大于等于3时才走批删
+8. 【用例】
+   （1）增加批量删除用例一个，覆盖批量请求目标对象数小于100、1000~2000、大于2000场景
+   （2）增加array的block用例1个和putPart快速失败用例1个，覆盖array的第一个block size为默认1MB，以及覆盖putPart快速失败用例。
+   （3）增加readahead默认值为1MB用例1个
+
+
+=========================================================================
+
+
 Version 3.1.1.28/2.8.3.28/2.7.2.28
 
 修复问题：
