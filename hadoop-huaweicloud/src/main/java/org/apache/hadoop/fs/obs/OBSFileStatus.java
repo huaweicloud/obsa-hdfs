@@ -31,7 +31,7 @@ import org.apache.hadoop.fs.Path;
 @InterfaceAudience.Private
 @InterfaceStability.Evolving
 public class OBSFileStatus extends FileStatus {
-  private boolean isEmptyDirectory;
+  private int isEmptyDirectoryStatus;
 
   /**
    * Create a directory status.
@@ -42,7 +42,7 @@ public class OBSFileStatus extends FileStatus {
    */
   public OBSFileStatus(boolean isemptydir, Path path, String owner) {
     super(0, true, 1, 0, 0, path);
-    isEmptyDirectory = isemptydir;
+    isEmptyDirectoryStatus = isemptydir? 1 : 0;
     setOwner(owner);
     setGroup(owner);
   }
@@ -56,7 +56,35 @@ public class OBSFileStatus extends FileStatus {
    */
   public OBSFileStatus(boolean isemptydir, Path path, long modificationTime, String owner) {
     super(0, true, 1, 0, modificationTime, path);
-    isEmptyDirectory = isemptydir;
+    isEmptyDirectoryStatus = isemptydir? 1 : 0;
+    setOwner(owner);
+    setGroup(owner);
+  }
+
+  /**
+   * Create a directory status.
+   *
+   * @param isemptydir is this an empty directory?
+   * @param path the path
+   * @param owner the owner
+   */
+  public OBSFileStatus(Path path, String owner) {
+    super(0, true, 1, 0, 0, path);
+    isEmptyDirectoryStatus = -1;
+    setOwner(owner);
+    setGroup(owner);
+  }
+
+  /**
+   * Create a directory status.
+   *
+   * @param isemptydir is this an empty directory?
+   * @param path the path
+   * @param owner the owner
+   */
+  public OBSFileStatus(Path path, long modificationTime, String owner) {
+    super(0, true, 1, 0, modificationTime, path);
+    isEmptyDirectoryStatus = -1;
     setOwner(owner);
     setGroup(owner);
   }
@@ -73,13 +101,13 @@ public class OBSFileStatus extends FileStatus {
   public OBSFileStatus(
       long length, long modification_time, Path path, long blockSize, String owner) {
     super(length, false, 1, blockSize, modification_time, path);
-    isEmptyDirectory = false;
+    isEmptyDirectoryStatus = -1;
     setOwner(owner);
     setGroup(owner);
   }
 
-  public boolean isEmptyDirectory() {
-    return isEmptyDirectory;
+  public int isEmptyDirectoryStatus() {
+    return isEmptyDirectoryStatus;
   }
 
   /**
@@ -124,6 +152,6 @@ public class OBSFileStatus extends FileStatus {
 
   @Override
   public String toString() {
-    return super.toString() + String.format(" isEmptyDirectory=%s", isEmptyDirectory());
+    return super.toString() + String.format(" isEmptyDirectoryStatus=%s", isEmptyDirectoryStatus());
   }
 }

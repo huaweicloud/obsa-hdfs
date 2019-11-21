@@ -67,10 +67,10 @@ public final class Constants {
   public static final int DEFAULT_MAX_ERROR_RETRIES = 3;
   // seconds until we give up trying to establish a connection to obs
   public static final String ESTABLISH_TIMEOUT = "fs.obs.connection.establish.timeout";
-  public static final int DEFAULT_ESTABLISH_TIMEOUT = 60000;
+  public static final int DEFAULT_ESTABLISH_TIMEOUT = 120000;
   // seconds until we give up on a connection to obs
   public static final String SOCKET_TIMEOUT = "fs.obs.connection.timeout";
-  public static final int DEFAULT_SOCKET_TIMEOUT = 60000;
+  public static final int DEFAULT_SOCKET_TIMEOUT = 120000;
   // socket send buffer to be used in OBS SDK
   public static final String SOCKET_SEND_BUFFER = "fs.obs.socket.send.buffer";
   public static final int DEFAULT_SOCKET_SEND_BUFFER = 64 * 1024;
@@ -129,6 +129,9 @@ public final class Constants {
   public static final int MULTI_DELETE_DEFAULT_NUMBER = 1000;
   // delete recursively or not.
   public static final String MULTI_DELETE_RECURSION = "fs.obs.multiobjectdelete.recursion";
+  // minimum number of objects in one multiobject-delete call
+  public static final String MULTI_DELETE_THRESHOLD = "fs.obs.multiobjectdelete.threshold";
+  public static final int MULTI_DELETE_DEFAULT_THRESHOLD = 3;
   // support to rename a folder to an empty folder or not.
   public static final String RENAME_TO_EMPTY_FOLDER = "fs.obs.rename.to_empty_folder";
   // comma separated list of directories
@@ -190,7 +193,7 @@ public final class Constants {
   /** read ahead buffer size to prevent connection re-establishments. */
   public static final String READAHEAD_RANGE = "fs.obs.readahead.range";
 
-  public static final long DEFAULT_READAHEAD_RANGE = 64 * 1024;
+  public static final long DEFAULT_READAHEAD_RANGE = 1 * 1024 * 1024;
   /**
    * Which input strategy to use for buffering, seeking and similar when reading data. Value:
    * {@value}
@@ -222,7 +225,7 @@ public final class Constants {
   public static final int DEFAULT_IDLE_CONNECTION_TIME = 30000;
   // maxIdleConnections
   public static final String MAX_IDLE_CONNECTIONS = "fs.obs.max.idle.connections";
-  public static final int DEFAULT_MAX_IDLE_CONNECTIONS = 10;
+  public static final int DEFAULT_MAX_IDLE_CONNECTIONS = 1000;
   // keepAlive
   public static final String KEEP_ALIVE = "fs.obs.keep.alive";
   public static final boolean DEFAULT_KEEP_ALIVE = true;
@@ -260,6 +263,7 @@ public final class Constants {
   public static final int DEFAULT_MAX_COPY_PART_THREADS = 40;
   // switch to the fast delete
   public static final String TRASH_ENALBLE = "fs.obs.trash.enable";
+  public static final String OBS_CONTENT_SUMMARY_ENABLE = "fs.obs.content.summary.enable";
   public static final boolean DEFAULT_TRASH = false;
   // The fast delete recycle directory
   public static final String TRASH_DIR = "fs.obs.trash.dir";
@@ -268,6 +272,9 @@ public final class Constants {
   public static final String SSE_TYPE = "fs.obs.server-side-encryption-type";
   // kms key id for sse-kms, while key base64 encoded content for sse-c
   public static final String SSE_KEY = "fs.obs.server-side-encryption-key";
+  // array first block size
+  public static final String FAST_UPLOAD_BUFFER_ARRAY_FIRST_BLOCK_SIZE = "fs.obs.fast.upload.array.first.buffer";
+  public static final int FAST_UPLOAD_BUFFER_ARRAY_FIRST_BLOCK_SIZE_DEFAULT = 1 * 1024 * 1024;
 
   private Constants() {}
 }

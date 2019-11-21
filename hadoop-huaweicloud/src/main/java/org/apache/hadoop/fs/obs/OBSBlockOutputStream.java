@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.fs.obs;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
@@ -89,6 +90,8 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
   /** Write operation helper; encapsulation of the filesystem operations. */
   private OBSWriteOperationHelper writeOperationHelper;
 
+  private boolean mockUploadPartError = false;
+
   /**
    * An OBS output stream which uploads partitions in a separate pool of threads; different {@link
    * OBSDataBlocks.BlockFactory} instances can control where data is buffered.
@@ -158,8 +161,17 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
    *
    * @return the active block; null if there isn't one.
    */
-  private synchronized OBSDataBlocks.DataBlock getActiveBlock() {
+  synchronized OBSDataBlocks.DataBlock getActiveBlock() {
     return activeBlock;
+  }
+
+  /**
+   * Set mock error
+   * @param isException mock error
+   */
+  @VisibleForTesting
+  public void MockPutPartError(boolean isException) {
+    this.mockUploadPartError = isException;
   }
 
   /**
@@ -232,6 +244,12 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
    */
   @Override
   public synchronized void write(byte[] source, int offset, int len) throws IOException {
+    if (excepted.get()) {
+      String closeWarning =
+              "write has error. bs : pre upload obs has error. the current version is not support re-write.";
+      LOG.warn(closeWarning);
+      throw new IOException(closeWarning);
+    }
     OBSDataBlocks.validateWriteArgs(source, offset, len);
     checkOpen();
     if (len == 0) {
@@ -292,12 +310,17 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
   private synchronized void uploadCurrentBlock() throws IOException {
     Preconditions.checkState(hasActiveBlock(), "No active block");
     LOG.debug("Writing block # {}", blockCount);
-    if (multiPartUpload == null) {
-      LOG.debug("Initiating Multipart upload");
-      multiPartUpload = new MultiPartUpload();
-    }
+
     try {
+      if (multiPartUpload == null) {
+        LOG.debug("Initiating Multipart upload");
+        multiPartUpload = new MultiPartUpload();
+      }
       multiPartUpload.uploadBlockAsync(getActiveBlock());
+    }  catch (IOException e) {
+      excepted.set(true);
+      LOG.error("Upload current block on ({}/{}) failed.", fs.getBucket(), key, e);
+      throw e;
     } finally {
       // set the block to null, so the next write will create a new block.
       clearActiveBlock();
@@ -607,14 +630,21 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
                   // this is the queued upload operation
                   LOG.debug("Uploading part {} for id '{}'", currentPartNumber, uploadId);
                   // do the upload
-                  PartEtag partETag;
+                  PartEtag partETag = null;
                   try {
+                    if (mockUploadPartError) {
+                      throw new ObsException("mock upload part error");
+                    }
                     UploadPartResult uploadPartResult = fs.uploadPart(request);
                     partETag =
                         new PartEtag(uploadPartResult.getEtag(), uploadPartResult.getPartNumber());
                     if (LOG.isDebugEnabled()) {
                       LOG.debug("Completed upload of {} to part {}", block, partETag);
                     }
+                  } catch (ObsException e) {
+                    // catch all exception
+                    excepted.set(true);
+                    LOG.error("UploadPart failed (ObsException). {}", translateException("UploadPart", key, e).getMessage());
                   } finally {
                     // close the stream and block
                     closeAll(LOG, uploadData, block);

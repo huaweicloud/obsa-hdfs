@@ -82,6 +82,7 @@ public class OBSFileSystem extends FileSystem {
   private boolean enablePosix = false;
   private boolean enableMultiObjectsDeleteRecursion = true;
   private boolean renameSupportEmptyDestinationFolder = true;
+  private boolean obsContentSummaryEnable = true;
   private String bucket;
   private int maxKeys;
   private Listing listing;
@@ -118,6 +119,7 @@ public class OBSFileSystem extends FileSystem {
   private String trashDir;
   private AccessControlList cannedACL;
   private SseWrapper sse;
+  private int multiDeleteThreshold;
   private static final int MAX_RETRY_TIME = 3;
   private static final int DELAY_TIME = 10;
 
@@ -195,8 +197,9 @@ public class OBSFileSystem extends FileSystem {
       MAX_ENTRIES_TO_DELETE = conf.getInt(MULTI_DELETE_MAX_NUMBER, MULTI_DELETE_DEFAULT_NUMBER);
       enableMultiObjectsDeleteRecursion = conf.getBoolean(MULTI_DELETE_RECURSION, true);
       renameSupportEmptyDestinationFolder = conf.getBoolean(RENAME_TO_EMPTY_FOLDER, true);
-
+      obsContentSummaryEnable = conf.getBoolean(OBS_CONTENT_SUMMARY_ENABLE, true);
       readAhead = longBytesOption(conf, READAHEAD_RANGE, DEFAULT_READAHEAD_RANGE, 0);
+      multiDeleteThreshold = conf.getInt(MULTI_DELETE_THRESHOLD, MULTI_DELETE_DEFAULT_THRESHOLD);
 
       int maxThreads = conf.getInt(MAX_THREADS, DEFAULT_MAX_THREADS);
       if (maxThreads < 2) {
@@ -241,7 +244,7 @@ public class OBSFileSystem extends FileSystem {
       maxCopyPartThreads = conf.getInt(MAX_COPY_PART_THREADS, DEFAULT_MAX_COPY_PART_THREADS);
       if (maxCopyPartThreads < 2) {
         LOG.warn(MAX_COPY_PART_THREADS + " must be at least 2: forcing to 2.");
-        maxReadThreads = 2;
+        maxCopyPartThreads = 2;
       }
       coreCopyPartThreads = new Double(Math.ceil(maxCopyPartThreads/2.0)).intValue();
       boundedThreadPool =
@@ -915,6 +918,25 @@ public class OBSFileSystem extends FileSystem {
         null);
   }
 
+
+  /** Check if a path exists.
+   *
+   * It is highly discouraged to call this method back to back with other
+   * {@link #getFileStatus(Path)} calls, as this will involve multiple redundant
+   * RPC calls in HDFS.
+   *
+   * @param f source path
+   * @return true if the path exists
+   * @throws IOException IO failure
+   */
+  public boolean exists(Path f) throws IOException {
+    try {
+      return getFileStatus(f) != null;
+    } catch (FileNotFoundException e) {
+      return false;
+    }
+  }
+
   /**
    * Renames Path src to Path dst. Can take place on local fs or remote DFS.
    *
@@ -939,7 +961,14 @@ public class OBSFileSystem extends FileSystem {
   public boolean rename(Path src, Path dst) throws IOException {
     LOG.info("Rename path {} to {}", src, dst);
     try {
-      return innerRename(src, dst);
+      if (enablePosix)
+      {
+        return renameBasedOnPosix(src, dst);
+      }
+      else
+      {
+        return renameBasedOnObject(src, dst);
+      }
     } catch (ObsException e) {
       throw translateException("rename(" + src + ", " + dst + ")", src, e);
     } catch (RenameFailedException e) {
@@ -951,6 +980,148 @@ public class OBSFileSystem extends FileSystem {
     } finally {
       LOG.info("Rename path {} to {} finished.", src, dst);
     }
+  }
+
+  /**
+   * The inner rename operation based on Posix bucket.
+   * See {@link #rename(Path, Path)} for the description of the
+   * operation. This operation throws an exception on any failure which needs to be reported and
+   * downgraded to a failure.
+   *
+   * @param src source path to be renamed from
+   * @param dst destination path to be renamed to
+   * @throws RenameFailedException if some criteria for a state changing rename was not met. This
+   *     means work didn't happen; it's not something which is reported upstream to the FileSystem
+   *     APIs, for which the semantics of "false" are pretty vague.
+   * @throws IOException on IO failure.
+   */
+  private boolean renameBasedOnPosix(Path src, Path dst)
+          throws IOException
+  {
+    String srcKey = pathToKey(src);
+    String dstKey = pathToKey(dst);
+
+    if (srcKey.isEmpty())
+    {
+      LOG.error("rename: src [{}] is root directory", src);
+      throw new IOException(src + " is root directory");
+    }
+
+    if (srcKey.equals(dstKey))
+    {
+      LOG.warn("rename: src and dest refer to the same file or directory: {}", dst);
+      return true;
+    }
+
+    if (dstKey.startsWith(srcKey)
+            && dstKey.charAt(srcKey.length()) == Path.SEPARATOR_CHAR)
+    {
+      LOG.error("rename: dest [{}] cannot be a descendant of src [{}]", dst, src);
+      return false;
+    }
+
+    try
+    {
+      OBSFileStatus dstStatus = getFileStatus(dst);
+      if (dstStatus.isDirectory())
+      {
+        String newDstString = maybeAddTrailingSlash(dst.toString());
+        String filename = srcKey.substring(pathToKey(src.getParent()).length() + 1);
+        dst = new Path(newDstString + filename);
+        dstKey = pathToKey(dst);
+        LOG.debug("rename: dest is an existing directory and will be changed to [{}]",
+                dst);
+
+        if (exists(dst))
+        {
+          LOG.error("rename: failed to rename " + src + " to " + dst +
+                  " because destination exists");
+          return false;
+        }
+      }
+      else
+      {
+        LOG.error("rename: failed to rename " + src + " to " + dst +
+                " because destination exists");
+        return false;
+      }
+    }
+    catch (FileNotFoundException e)
+    {
+      // if destination does not exist, do not change the destination key, and just do rename.
+      LOG.debug("rename: dest [{}] does not exist", dst);
+    }
+    catch (FileConflictException e)
+    {
+      Path parent = dst.getParent();
+      if (!pathToKey(parent).isEmpty()) {
+        OBSFileStatus dstParentStatus = getFileStatus(parent);
+        if (!dstParentStatus.isDirectory()) {
+          throw new ParentNotDirectoryException(parent + " is not a directory");
+        }
+      }
+    }
+
+    try
+    {
+      LOG.debug("rename: rename from [{}] to [{}] ...", srcKey, dstKey);
+      innerFsRenameFile(srcKey, dstKey);
+    }
+    catch (FileNotFoundException outerException)
+    {
+      LOG.error("rename: failed to rename src [{}] to dest [{}]", src, dst, outerException);
+      return false;
+    }
+//    catch (FileConflictException outerException)
+//    {
+//      try
+//      {
+//        OBSFileStatus dstStatus = getFileStatus(dst);
+//        if (dstStatus.isDirectory())
+//        {
+//          String newDstString = maybeAddTrailingSlash(dst.toString());
+//          String filename = srcKey.substring(pathToKey(src.getParent()).length() + 1);
+//          dst = new Path(newDstString + filename);
+//          LOG.debug("rename: dest is an existing directory and will be changed to [{}]",
+//                  dst);
+//        }
+//      }
+//      catch (FileNotFoundException e)
+//      {
+//        // if destination does not exist, do not change the destination key, and just do rename.
+//        LOG.debug("rename: dest [{}] does not exist", dst);
+//      }
+//      catch (FileConflictException e)
+//      {
+//        Path parent = dst.getParent();
+//        if (!pathToKey(parent).isEmpty()) {
+//          OBSFileStatus dstParentStatus = getFileStatus(parent);
+//          if (!dstParentStatus.isDirectory()) {
+//            throw new ParentNotDirectoryException(parent + " is not a directory");
+//          }
+//        }
+//      }
+//
+//      String newDstKey = pathToKey(dst);
+//      LOG.debug("rename: retry rename from [{}] to [{}] ...", srcKey, newDstKey);
+//      try {
+//        innerFsRenameFile(srcKey, newDstKey);
+//      }
+//      catch (FileConflictException e)
+//      {
+//        if(exists(dst))
+//        {
+//          return false;
+//        }
+//      }
+//    }
+    catch (IOException outerException)
+    {
+      LOG.error("rename: failed to rename src [{}] to dest [{}]", src, dst, outerException);
+      throw outerException;
+    }
+
+    return true;
   }
 
   /**
@@ -967,7 +1138,7 @@ public class OBSFileSystem extends FileSystem {
    * @throws IOException on IO failure.
    * @throws ObsException on failures inside the OBS SDK
    */
-  private boolean innerRename(Path src, Path dst)
+  private boolean renameBasedOnObject(Path src, Path dst)
       throws RenameFailedException, FileNotFoundException, IOException, ObsException {
     String srcKey = pathToKey(src);
     String dstKey = pathToKey(dst);
@@ -1005,7 +1176,7 @@ public class OBSFileSystem extends FileSystem {
         } else if (!renameSupportEmptyDestinationFolder) {
           throw new RenameFailedException(src, dst, "destination is an existed directory")
               .withExitCode(false);
-        } else if (!dstStatus.isEmptyDirectory()) {
+        } else if (dstStatus.isEmptyDirectoryStatus() == 0) {
           throw new RenameFailedException(src, dst, "Destination is a non-empty directory")
               .withExitCode(false);
         }
@@ -1022,25 +1193,25 @@ public class OBSFileSystem extends FileSystem {
       }
 
     } catch (FileNotFoundException e) {
-      LOG.debug("rename: destination path {} not found", dst);
+        LOG.debug("rename: destination path {} not found", dst);
 
-      if (enablePosix && (!srcStatus.isDirectory()) && dstKey.endsWith("/")) {
-        throw new RenameFailedException(
-            src, dst, "source is a file but destination directory is not existed");
-      }
-
-      // Parent must exist
-      Path parent = dst.getParent();
-      if (!pathToKey(parent).isEmpty()) {
-        try {
-          OBSFileStatus dstParentStatus = getFileStatus(dst.getParent());
-          if (!dstParentStatus.isDirectory()) {
-            throw new RenameFailedException(src, dst, "destination parent is not a directory");
-          }
-        } catch (FileNotFoundException e2) {
-          throw new RenameFailedException(src, dst, "destination has no parent ");
+        // Parent must exist
+        Path parent = dst.getParent();
+        if (!pathToKey(parent).isEmpty())
+        {
+            try
+            {
+                OBSFileStatus dstParentStatus = getFileStatus(dst.getParent());
+                if (!dstParentStatus.isDirectory())
+                {
+                    throw new RenameFailedException(src, dst, "destination parent is not a directory");
+                }
+            }
+            catch (FileNotFoundException e2)
+            {
+                throw new RenameFailedException(src, dst, "destination has no parent ");
+            }
         }
-      }
     }
 
     // Ok! Time to start
@@ -1089,12 +1260,8 @@ public class OBSFileSystem extends FileSystem {
       throws IOException {
     long startTime = System.nanoTime();
 
-    if (enablePosix) {
-      fsRenameFile(srcKey, dstKey);
-    } else {
-      copyFile(srcKey, dstKey, srcStatus.getLen());
-      innerDelete(srcStatus, false);
-    }
+    copyFile(srcKey, dstKey, srcStatus.getLen());
+    innerDelete(srcStatus, false);
 
     if (LOG.isDebugEnabled()) {
       long delay = System.nanoTime() - startTime;
@@ -1124,67 +1291,55 @@ public class OBSFileSystem extends FileSystem {
       throws IOException {
     long startTime = System.nanoTime();
 
-    if (enablePosix) {
-      fsRenameFolder(dstFolderExisted, srcKey, dstKey);
-    } else {
-      List<KeyAndVersion> keysToDelete = new ArrayList<>();
-      if (dstStatus != null && dstStatus.isEmptyDirectory()) {
-        // delete unnecessary fake directory.
-        keysToDelete.add(new KeyAndVersion(dstKey));
-      }
-
-      ListObjectsRequest request = new ListObjectsRequest();
-      request.setBucketName(bucket);
-      request.setPrefix(srcKey);
-      request.setMaxKeys(maxKeys);
-
-      ObjectListing objects = listObjects(request);
-
-      List<Future<DeleteObjectsResult>> deletefutures = new LinkedList<>();
-      List<Future<CopyObjectResult>> copyfutures = new LinkedList<>();
-      while (true) {
-        for (ObsObject summary : objects.getObjects()) {
-          keysToDelete.add(new KeyAndVersion(summary.getObjectKey()));
-          String newDstKey = dstKey + summary.getObjectKey().substring(srcKey.length());
-          // copyFile(summary.getObjectKey(), newDstKey, summary.getMetadata().getContentLength());
-          copyfutures.add(
-              copyFileAsync(
-                  summary.getObjectKey(), newDstKey, summary.getMetadata().getContentLength()));
-
-          if (keysToDelete.size() == MAX_ENTRIES_TO_DELETE) {
-            waitAllCopyFinished(copyfutures);
-            copyfutures.clear();
-            deletefutures.add(removeKeysAsync(keysToDelete, true, false));
-          }
-        }
-
-        if (!objects.isTruncated()) {
-          if (!keysToDelete.isEmpty()) {
-            waitAllCopyFinished(copyfutures);
-            copyfutures.clear();
-            deletefutures.add(removeKeysAsync(keysToDelete, false, false));
-          }
-          break;
-        }
-        objects = continueListObjects(objects);
-      }
-      try {
-        for (Future deleteFuture : deletefutures) {
-          deleteFuture.get();
-        }
-      } catch (InterruptedException e) {
-        LOG.warn("Interrupted while copying objects (delete)");
-        throw new InterruptedIOException("Interrupted while copying objects (delete)");
-      } catch (ExecutionException e) {
-        if (e.getCause() instanceof ObsException) {
-          throw (ObsException) e.getCause();
-        }
-        if (e.getCause() instanceof IOException) {
-          throw (IOException) e.getCause();
-        }
-        throw new ObsException("unknown error while copying objects (delete)", e.getCause());
-      }
+    List<KeyAndVersion> keysToDelete = new ArrayList<>();
+    if (dstStatus != null && dstStatus.isEmptyDirectoryStatus() == 1)
+    {
+      // delete unnecessary fake directory.
+      keysToDelete.add(new KeyAndVersion(dstKey));
     }
+
+    ListObjectsRequest request = new ListObjectsRequest();
+    request.setBucketName(bucket);
+    request.setPrefix(srcKey);
+    request.setMaxKeys(maxKeys);
+
+    ObjectListing objects = listObjects(request);
+
+    List<Future<CopyObjectResult>> copyfutures = new LinkedList<>();
+    while (true)
+    {
+      for (ObsObject summary : objects.getObjects())
+      {
+        keysToDelete.add(new KeyAndVersion(summary.getObjectKey()));
+        String newDstKey = dstKey + summary.getObjectKey().substring(srcKey.length());
+        // copyFile(summary.getObjectKey(), newDstKey, summary.getMetadata().getContentLength());
+        copyfutures.add(
+                copyFileAsync(
+                        summary.getObjectKey(), newDstKey, summary.getMetadata().getContentLength()));
+
+        if (keysToDelete.size() == MAX_ENTRIES_TO_DELETE)
+        {
+          waitAllCopyFinished(copyfutures);
+          copyfutures.clear();
+        }
+      }
+
+      if (!objects.isTruncated())
+      {
+        if (!keysToDelete.isEmpty())
+        {
+          waitAllCopyFinished(copyfutures);
+          copyfutures.clear();
+        }
+        break;
+      }
+      objects = continueListObjects(objects);
+    }
+
+    DeleteObjectsRequest deleteObjectsRequest = new DeleteObjectsRequest(bucket);
+    deleteObjectsRequest.setKeyAndVersions(
+            keysToDelete.toArray(new KeyAndVersion[keysToDelete.size()]));
+    deleteObjects(deleteObjectsRequest);
 
     if (LOG.isDebugEnabled()) {
       long delay = System.nanoTime() - startTime;
@@ -1201,7 +1356,7 @@ public class OBSFileSystem extends FileSystem {
   }
 
   private void waitAllCopyFinished(List<Future<CopyObjectResult>> copyFutures)
-      throws InterruptedIOException {
+      throws InterruptedIOException, IOException {
     try {
       for (Future copyFuture : copyFutures) {
         copyFuture.get();
@@ -1211,30 +1366,87 @@ public class OBSFileSystem extends FileSystem {
       // TODO Interrupted
       throw new InterruptedIOException("Interrupted while copying objects (copy)");
     } catch (ExecutionException e) {
-      e.printStackTrace();
+      for (Future future : copyFutures) {
+        future.cancel(true);
+      }
+
+      throw OBSUtils.extractException(
+              "waitAllCopyFinished", copyFutures.toString(), e);
     }
   }
 
   /**
    * Used to rename a posix file.
    *
-   * @param src source object key
-   * @param dst destination object key
+   * @param srcKey source object key
+   * @param dstKey destination object key
    * @throws IOException io exception
    * @throws ObsException obs exception
    */
-  private void fsRenameFile(String src, String dst) throws IOException, ObsException {
-    LOG.debug("RenameFile path {} to {}", src, dst);
+  private void fsRenameFile(String srcKey, String dstKey) throws IOException {
+    for (int retryTime = 1; retryTime < MAX_RETRY_TIME; retryTime++) {
+      try
+      {
+        innerFsRenameFile(srcKey, dstKey);
+        return;
+      }
+      catch (IOException e)
+      {
+        if (e instanceof FileNotFoundException
+                || e instanceof FileConflictException)
+        {
+          throw e;
+        }
+
+        LOG.warn("Failed to rename from [{}] to [{}], retry time [{}], " +
+                "exception [{}]", srcKey, dstKey, retryTime, e);
+
+        try {
+          Thread.sleep(DELAY_TIME);
+        } catch (InterruptedException ie) {
+          throw e;
+        }
+      }
+    }
+
+    innerFsRenameFile(srcKey, dstKey);
+  }
+
+  private void innerFsRenameFile(String srcKey, String dstKey) throws IOException {
+    LOG.debug("RenameFile path {} to {}", srcKey, dstKey);
 
     try {
       final RenameRequest renameObjectRequest = new RenameRequest();
       renameObjectRequest.setBucketName(bucket);
-      renameObjectRequest.setObjectKey(src);
-      renameObjectRequest.setNewObjectKey(dst);
+      renameObjectRequest.setObjectKey(srcKey);
+      renameObjectRequest.setNewObjectKey(dstKey);
       obs.renameFile(renameObjectRequest);
       incrementWriteOperations();
     } catch (ObsException e) {
-      throw translateException("renameFile(" + src + ", " + dst + ")", src, e);
+      if (e.getResponseCode() == 404) {
+//        if (!exists(keyToPath(srcKey)))
+//        {
+//          if(exists(keyToPath(dstKey)))
+//          {
+//            // this scenarios may occurs during a retry rename
+//            return;
+//          }
+//          else
+//          {
+//            throw new FileNotFoundException("No such file or directory: " + srcKey);
+//          }
+//        }
+//        else
+//        {
+//          throw new FileNotFoundException("No parent or ancestor of: " + srcKey);
+//        }
+        // here, not consider a retry rename
+        throw new FileNotFoundException("No such file or directory: " + srcKey);
+      }
+      if (e.getResponseCode() == 409) {
+        throw new FileConflictException("File conflicts during rename, " + e.getResponseStatus());
+      }
+      throw translateException("renameFile(" + srcKey + ", " + dstKey + ")", srcKey, e);
     }
   }
 
@@ -1338,7 +1550,7 @@ public class OBSFileSystem extends FileSystem {
       fsRenameToNewFolder(srcKey, dstKey);
     } else {
       // Rename file.
-      fsRenameFile(srcKey, dstKey);
+      innerFsRenameFile(srcKey, dstKey);
     }
   }
 
@@ -1408,6 +1620,26 @@ public class OBSFileSystem extends FileSystem {
    * @return the results
    */
   ObjectListing listObjects(ListObjectsRequest request) {
+    for (int retryTime = 1; retryTime < MAX_RETRY_TIME; retryTime++) {
+      try {
+        return innerListObjects(request);
+      } catch (ObsException e) {
+        LOG.warn("Failed to listObjects for request[{}], retry time [{}], due to exception[{}]",
+                  request, retryTime, e);
+        try {
+          Thread.sleep(DELAY_TIME);
+        } catch (InterruptedException ie) {
+          LOG.error("Failed to listObjects for request[{}], retry time [{}], due to exception[{}]",
+                  request, retryTime, e);
+          throw e;
+        }
+      }
+    }
+
+    return innerListObjects(request);
+  }
+
+  private ObjectListing innerListObjects(ListObjectsRequest request) throws ObsException {
     incrementReadOperations();
     return obs.listObjects(request);
   }
@@ -1422,7 +1654,6 @@ public class OBSFileSystem extends FileSystem {
     String delimiter = objects.getDelimiter();
     int maxKeyNum = objects.getMaxKeys();
     // LOG.debug("delimiters: "+objects.getDelimiter());
-    incrementReadOperations();
     ListObjectsRequest request = new ListObjectsRequest();
     request.setMarker(objects.getNextMarker());
     request.setBucketName(bucket);
@@ -1435,6 +1666,27 @@ public class OBSFileSystem extends FileSystem {
     if (delimiter != null) {
       request.setDelimiter(delimiter);
     }
+    return innerContinueListObjects(request);
+  }
+
+  private ObjectListing innerContinueListObjects(ListObjectsRequest request) {
+    for (int retryTime = 1; retryTime < MAX_RETRY_TIME; retryTime++) {
+      try {
+        incrementReadOperations();
+        return obs.listObjects(request);
+      } catch (ObsException e) {
+        LOG.warn("Continue list objects failed for request[{}], retry time[{}], due to exception[{}]",
+                  request, retryTime, e);
+        try {
+          Thread.sleep(DELAY_TIME);
+        } catch (InterruptedException ie) {
+          LOG.error("Continue list objects failed for request[{}], retry time[{}], due to exception[{}]",
+                  request, retryTime, e);
+          throw e;
+        }
+      }
+    }
+
     return obs.listObjects(request);
   }
 
@@ -1456,10 +1708,31 @@ public class OBSFileSystem extends FileSystem {
    *
    * @param key key to blob to delete.
    */
-  private void deleteObject(String key, boolean isFolder) throws InvalidRequestException {
+  private void deleteObject(String key, boolean isFolder) throws InvalidRequestException, IOException {
     blockRootDelete(key);
-    obs.deleteObject(bucket, key);
-    incrementWriteOperations();
+    ObsException lastException = null;
+    for (int retryTime = 1; retryTime <= MAX_RETRY_TIME; retryTime++) {
+      try {
+        obs.deleteObject(bucket, key);
+        incrementWriteOperations();
+        return;
+      } catch (ObsException e) {
+        lastException = e;
+        LOG.warn("Delete path failed with [{}], retry time [{}] " +
+                  "- request id [{}] - error code [{}] - error message [{}]",
+                e.getResponseCode(), retryTime, e.getErrorRequestId(), e.getErrorCode(), e.getErrorMessage());
+        if (retryTime < MAX_RETRY_TIME) {
+          try {
+            Thread.sleep(DELAY_TIME);
+          } catch (InterruptedException ie) {
+            throw translateException("delete", key, e);
+          }
+        }
+      }
+    }
+    throw translateException(
+            String.format("retry max times [%s] delete failed", MAX_RETRY_TIME),
+            key, lastException);
   }
 
   /**
@@ -1481,9 +1754,33 @@ public class OBSFileSystem extends FileSystem {
    *
    * @param deleteRequest keys to delete on the obs-backend
    */
-  private void deleteObjects(DeleteObjectsRequest deleteRequest) {
-    obs.deleteObjects(deleteRequest);
-    incrementWriteOperations();
+  private void deleteObjects(DeleteObjectsRequest deleteRequest) throws InvalidRequestException,
+    IOException {
+    DeleteObjectsResult result = null;
+    deleteRequest.setQuiet(true);
+    try {
+      result = obs.deleteObjects(deleteRequest);
+      incrementWriteOperations();
+    } catch (ObsException e) {
+      LOG.warn("delete objects failed, request [{}], request id [{}] - error code [{}] - error message [{}]",
+              deleteRequest, e.getErrorRequestId(), e.getErrorCode(), e.getErrorMessage());
+      for (KeyAndVersion keyAndVersion : deleteRequest.getKeyAndVersionsList()) {
+        deleteObject(keyAndVersion.getKey(), keyAndVersion.getKey().endsWith("/"));
+      }
+      return;
+    }
+
+    // delete one by one if there is errors
+    if (result != null) {
+      List<DeleteObjectsResult.ErrorResult> errorResults = result.getErrorResults();
+      if (!errorResults.isEmpty()) {
+        LOG.warn("bulk delete {} objects, {} failed, begin to delete one by one.",
+                deleteRequest.getKeyAndVersionsList().size(), errorResults.size());
+        for (DeleteObjectsResult.ErrorResult errorResult : errorResults) {
+          deleteObject(errorResult.getObjectKey(), errorResult.getObjectKey().endsWith("/"));
+        }
+      }
+    }
   }
 
   /**
@@ -1699,7 +1996,7 @@ public class OBSFileSystem extends FileSystem {
     }
     Future<DeleteObjectsResult> future;
 
-    if (enableMultiObjectsDelete) {
+    if (enableMultiObjectsDelete && keysToDelete.size() >= multiDeleteThreshold) {
       final DeleteObjectsRequest deleteObjectsRequest = new DeleteObjectsRequest(bucket);
       deleteObjectsRequest.setKeyAndVersions(
           keysToDelete.toArray(new KeyAndVersion[keysToDelete.size()]));
@@ -1737,13 +2034,13 @@ public class OBSFileSystem extends FileSystem {
 
   // Remove all objects indicated by a leaf key list.
   private void removeKeys(List<KeyAndVersion> keysToDelete, boolean clearKeys)
-      throws InvalidRequestException {
+      throws InvalidRequestException, IOException {
     removeKeys(keysToDelete, clearKeys, false);
   }
 
   private void removeKeys(
       List<KeyAndVersion> keysToDelete, boolean clearKeys, boolean checkRootDelete)
-      throws InvalidRequestException {
+      throws InvalidRequestException, IOException {
     if (keysToDelete.isEmpty()) {
       // exit fast if there are no keys to delete
       return;
@@ -1755,7 +2052,7 @@ public class OBSFileSystem extends FileSystem {
       }
     }
 
-    if (!enableMultiObjectsDelete) {
+    if (!enableMultiObjectsDelete || keysToDelete.size() < multiDeleteThreshold) {
       // delete one by one.
       for (KeyAndVersion keyVersion : keysToDelete) {
         deleteObject(keyVersion.getKey(), keyVersion.getKey().endsWith("/"));
@@ -1796,29 +2093,14 @@ public class OBSFileSystem extends FileSystem {
    * @throws IOException due to inability to delete a directory or file.
    */
   public boolean delete(Path f, boolean recursive) throws IOException {
-    ObsException lastException = null;
-    for (int retryTime = 1; retryTime <= MAX_RETRY_TIME; retryTime++) {
-      try {
-        return innerDelete(getFileStatus(f), recursive);
-      } catch (FileNotFoundException e) {
-        LOG.warn("Couldn't delete {} - does not exist", f);
-        return false;
-      } catch (ObsException e) {
-        if (e.getResponseCode() == 409) {
-          lastException = e;
-          LOG.warn("Delete path failed with [{}], retry time [{}] - request id [{}] - error code [{}] - error message [{}]",
-                  e.getResponseCode(), retryTime, e.getErrorRequestId(), e.getErrorCode(), e.getErrorMessage());
-          try {
-            Thread.sleep(DELAY_TIME);
-          } catch (InterruptedException ie) {
-            throw e;
-          }
-        } else {
-          throw translateException("delete", f, e);
-        }
-      }
+    try {
+      return innerDelete(getFileStatus(f), recursive);
+    } catch (FileNotFoundException e) {
+      LOG.warn("Couldn't delete {} - does not exist", f);
+      return false;
+    } catch (ObsException e) {
+      throw translateException("delete", f, e);
     }
-    throw translateException(String.format("retry max times [%s] delete failed", MAX_RETRY_TIME), f, lastException);
   }
 
   /**
@@ -1833,7 +2115,7 @@ public class OBSFileSystem extends FileSystem {
    */
   private boolean innerDelete(OBSFileStatus status, boolean recursive)
       throws IOException, ObsException {
-    LOG.info("delete: path {} - recursive {}", status.getPath(), recursive);
+    LOG.debug("delete: path {} - recursive {}", status.getPath(), recursive);
     if (enablePosix) {
       return fsDelete(status, recursive);
     }
@@ -2012,7 +2294,7 @@ public class OBSFileSystem extends FileSystem {
 
   // Remove sub objects of each depth one by one to avoid that parents and children in a same batch.
   private void fsRemoveKeys(FileStatus[] arFileStatus)
-      throws ObsException, InvalidRequestException {
+      throws ObsException, InvalidRequestException, IOException {
     if (arFileStatus.length <= 0) {
       // exit fast if there are no keys to delete
       return;
@@ -2033,7 +2315,7 @@ public class OBSFileSystem extends FileSystem {
   // it
   // can't make sure that an object is deleted before it's children.
   private void fsRemoveKeysByDepth(FileStatus[] arFileStatus)
-      throws ObsException, InvalidRequestException {
+      throws ObsException, InvalidRequestException, IOException {
     if (arFileStatus.length <= 0) {
       // exit fast if there is no keys to delete
       return;
@@ -2081,7 +2363,7 @@ public class OBSFileSystem extends FileSystem {
   }
 
   private int fsRemoveKeysByDepth(List<KeyAndVersion> keys)
-      throws ObsException, InvalidRequestException {
+      throws ObsException, InvalidRequestException, IOException {
     if (keys.size() <= 0) {
       // exit fast if there is no keys to delete
       return 0;
@@ -2271,6 +2553,9 @@ public class OBSFileSystem extends FileSystem {
 
     // Extract deepest folders.
     List<KeyAndVersion> deepestFolders = fsExtractDeepestFolders(folders);
+    if (null == deepestFolders) {
+      return 0;
+    }
 
     // Recursively delete sub objects of each deepest folder one by one.
     for (KeyAndVersion folder : deepestFolders) {
@@ -2510,8 +2795,36 @@ public class OBSFileSystem extends FileSystem {
    * @throws IOException on other problems.
    */
   public OBSFileStatus getFileStatus(final Path f) throws IOException {
+    for (int retryTime = 1; retryTime < MAX_RETRY_TIME; retryTime++) {
+      try
+      {
+        return innerGetFileStatus(f);
+      }
+      catch (IOException e)
+      {
+        if (e instanceof FileNotFoundException
+                || e instanceof FileConflictException)
+        {
+          throw e;
+        }
+
+        LOG.warn("Failed to get file status for [{}], retry time [{}], " +
+                        "exception [{}]", f, retryTime, e);
+
+        try {
+          Thread.sleep(DELAY_TIME);
+        } catch (InterruptedException ie) {
+          throw e;
+        }
+      }
+    }
+
+    return innerGetFileStatus(f);
+  }
+
+  protected OBSFileStatus innerGetFileStatus(final Path f) throws IOException {
     if (enablePosix) {
-      return fsGetObjectStatus(f);
+      return innerFsGetObjectStatus(f);
     }
 
     final Path path = qualify(f);
@@ -2567,7 +2880,7 @@ public class OBSFileSystem extends FileSystem {
     }
 
     try {
-      boolean isEmpty = isFolderEmpty(key);
+      boolean isEmpty = innerIsFolderEmpty(key);
       return new OBSFileStatus(isEmpty, path, username);
     } catch (ObsException e) {
       if (e.getResponseCode() != 404) {
@@ -2601,13 +2914,36 @@ public class OBSFileSystem extends FileSystem {
 
   // Used to check if a folder is empty or not.
   private boolean isFolderEmpty(String key) throws FileNotFoundException, ObsException {
+    for (int retryTime = 1; retryTime < MAX_RETRY_TIME; retryTime++) {
+      try
+      {
+        return innerIsFolderEmpty(key);
+      }
+      catch (ObsException e)
+      {
+        LOG.warn("Failed to check empty folder for [{}], retry time [{}], " +
+                "exception [{}]", key, retryTime, e);
+
+        try {
+          Thread.sleep(DELAY_TIME);
+        } catch (InterruptedException ie) {
+          throw e;
+        }
+      }
+    }
+
+    return innerIsFolderEmpty(key);
+  }
+
+  // Used to check if a folder is empty or not.
+  private boolean innerIsFolderEmpty(String key) throws FileNotFoundException, ObsException {
     key = maybeAddTrailingSlash(key);
     ListObjectsRequest request = new ListObjectsRequest();
     request.setBucketName(bucket);
     request.setPrefix(key);
     request.setDelimiter("/");
     request.setMaxKeys(3);
-    ObjectListing objects = listObjects(request);
+    ObjectListing objects = innerListObjects(request);
 
     if (!objects.getCommonPrefixes().isEmpty() || !objects.getObjects().isEmpty()) {
       if (isFolderEmpty(key, objects)) {
@@ -2642,16 +2978,91 @@ public class OBSFileSystem extends FileSystem {
     throw new FileNotFoundException("No such file or directory: " + key);
   }
 
+  @Override
+  public ContentSummary getContentSummary(Path f) throws IOException {
+    return  obsContentSummaryEnable ? getObsContentSummary(f) : super.getContentSummary(f);
+  }
+
+  private ContentSummary getObsContentSummary(Path f) throws IOException {
+    FileStatus status = getFileStatus(f);
+    if (status.isFile()) {
+      // f is a file
+      long length = status.getLen();
+      return new ContentSummary.Builder().length(length).
+              fileCount(1).directoryCount(0).spaceConsumed(length).build();
+    }
+    // f is a directory
+    return getDirectoryContentSummary(pathToKey(f));
+  }
+
+  private void getDirectories(String key, String sourceKey, Set<String> directories) {
+    Path p = new Path(key);
+    Path sourcePath = new Path(sourceKey);
+    // directory must add first
+    if (key.endsWith("/") && (p.compareTo(sourcePath) > 0)) {
+      directories.add(p.toString());
+    }
+    while (p.compareTo(sourcePath) > 0) {
+      p = p.getParent();
+      if (p.isRoot() || p.compareTo(sourcePath) == 0) {
+        break;
+      }
+      directories.add(p.toString());
+    }
+  }
+
+  private ContentSummary getDirectoryContentSummary(String key) {
+    key = maybeAddTrailingSlash(key);
+    long[] summary = {0, 0, 1};
+    LOG.debug("Summary key {}", key);
+    ListObjectsRequest request = new ListObjectsRequest();
+    request.setBucketName(bucket);
+    request.setPrefix(key);
+    Set<String> directories = new TreeSet<>();
+    request.setMaxKeys(maxKeys);
+    ObjectListing objects = listObjects(request);
+    while (true) {
+      if (!objects.getCommonPrefixes().isEmpty() || !objects.getObjects().isEmpty()) {
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Found path as directory (with /): {}/{}",
+                  objects.getCommonPrefixes().size(),
+                  objects.getObjects().size());
+        }
+        for(String prefix : objects.getCommonPrefixes()){
+          System.out.println("Objects in folder [" + prefix + "]:");
+          getDirectories(prefix, key, directories);
+        }
+
+        for (ObsObject obj : objects.getObjects()) {
+          LOG.debug("Summary: {} {}", obj.getObjectKey(), obj.getMetadata().getContentLength());
+          if (!obj.getObjectKey().endsWith("/")) {
+            summary[0] += obj.getMetadata().getContentLength();
+            summary[1] += 1;
+          }
+          getDirectories(obj.getObjectKey(), key, directories);
+        }
+      }
+      if (!objects.isTruncated()) {
+        break;
+      }
+      objects = continueListObjects(objects);
+    }
+    summary[2] += directories.size();
+    LOG.debug(String.format("file size [%d] - file count [%d] - directory count [%d] - file path [%s]", summary[0], summary[1], summary[2], key));
+    return new ContentSummary.Builder().length(summary[0]).
+            fileCount(summary[1]).directoryCount(summary[2]).
+            spaceConsumed(summary[0]).build();
+  }
+
   // Used to get the status of a file or folder in a file-gateway bucket.
-  public OBSFileStatus fsGetObjectStatus(final Path f) throws IOException {
+  private OBSFileStatus innerFsGetObjectStatus(final Path f) throws IOException {
     final Path path = qualify(f);
     String key = pathToKey(path);
     LOG.debug("Getting path status for {}  ({})", path, key);
 
     if (key.isEmpty()) {
       LOG.debug("Found root directory");
-      boolean isEmpty = isFolderEmpty(key);
-      return new OBSFileStatus(isEmpty, path, username);
+      return new OBSFileStatus(path, username);
     }
 
     try {
@@ -2660,8 +3071,7 @@ public class OBSFileSystem extends FileSystem {
       incrementReadOperations();
       if (fsIsFolder(meta)) {
         LOG.debug("Found file (with /): fake directory");
-        boolean isEmpty = isFolderEmpty(key);
-        return new OBSFileStatus(isEmpty, path, dateToLong(meta.getLastModified()), username);
+        return new OBSFileStatus(path, dateToLong(meta.getLastModified()), username);
       } else {
         LOG.debug("Found file (with /): real file? should not happen: {}", key);
         return new OBSFileStatus(
@@ -2672,13 +3082,15 @@ public class OBSFileSystem extends FileSystem {
             username);
       }
     } catch (ObsException e) {
-      if (e.getResponseCode() != 404) {
-        throw translateException("getFileStatus", path, e);
+      if (e.getResponseCode() == 404) {
+        LOG.debug("Not Found: {}", path);
+        throw new FileNotFoundException("No such file or directory: " + path);
       }
+      if (e.getResponseCode() == 409) {
+        throw new FileConflictException("file conflicts: " + e.getResponseStatus());
+      }
+      throw translateException("getFileStatus", path, e);
     }
-
-    LOG.debug("Not Found: {}", path);
-    throw new FileNotFoundException("No such file or directory: " + path);
   }
 
   /**
@@ -2930,12 +3342,39 @@ public class OBSFileSystem extends FileSystem {
    * @param srcKey source object path
    * @param dstKey destination object path
    * @param size object size
-   * @throws ObsException on failures inside the OBS SDK
    * @throws InterruptedIOException the operation was interrupted
    * @throws IOException Other IO problems
    */
   private void copyFile(final String srcKey, final String dstKey, final long size)
-      throws IOException, InterruptedIOException, ObsException {
+          throws IOException, InterruptedIOException {
+    for (int retryTime = 1; retryTime < MAX_RETRY_TIME; retryTime++) {
+      try
+      {
+        innerCopyFile(srcKey, dstKey, size);
+        return;
+      }
+      catch (IOException e)
+      {
+        if (e instanceof InterruptedIOException)
+        {
+          throw e;
+        }
+
+        LOG.warn("Failed to copy file from [{}] to [{}] with size [{}], retry time [{}], " +
+                "exception [{}]", srcKey, dstKey, size, retryTime, e);
+        try {
+          Thread.sleep(DELAY_TIME);
+        } catch (InterruptedException ie) {
+          throw e;
+        }
+      }
+    }
+
+    innerCopyFile(srcKey, dstKey, size);
+  }
+
+  private void innerCopyFile(final String srcKey, final String dstKey, final long size)
+      throws IOException, InterruptedIOException {
     LOG.debug("copyFile {} -> {} ", srcKey, dstKey);
     try {
       // 100MB per part
@@ -3049,12 +3488,6 @@ public class OBSFileSystem extends FileSystem {
           "Multi-part copy with id '" + uploadId + "' from " + srcKey + "to " + dstKey, dstKey, e);
     }
 
-    if (partEtags.size() != partCount) {
-      LOG.error("partEtags({}) is not equals partCount({}).", partEtags.size(), partCount);
-      throw new IllegalStateException(
-          "Upload multiparts fail due to some parts are not finished yet");
-    }
-
     // Make part numbers in ascending order
     Collections.sort(
         partEtags,
@@ -3087,6 +3520,30 @@ public class OBSFileSystem extends FileSystem {
 
   // Used to create an empty file that represents an empty directory
   private void createEmptyObject(final String objectName)
+          throws ObsException, InterruptedIOException {
+    for (int retryTime = 1; retryTime < MAX_RETRY_TIME; retryTime++) {
+      try
+      {
+        innerCreateEmptyObject(objectName);
+        return;
+      }
+      catch (ObsException e)
+      {
+        LOG.warn("Failed to create empty object [{}], retry time [{}], " +
+                "exception [{}]", objectName, retryTime, e);
+        try {
+          Thread.sleep(DELAY_TIME);
+        } catch (InterruptedException ie) {
+          throw e;
+        }
+      }
+    }
+
+    innerCreateEmptyObject(objectName);
+  }
+
+  // Used to create an empty file that represents an empty directory
+  private void innerCreateEmptyObject(final String objectName)
       throws ObsException, InterruptedIOException {
     final InputStream im =
         new InputStream() {
@@ -3106,6 +3563,7 @@ public class OBSFileSystem extends FileSystem {
       throw new InterruptedIOException("Interrupted creating " + objectName);
     } catch (ExecutionException e) {
       incrementPutCompletedStatistics(false, 0);
+      upload.cancel(true);
       if (e.getCause() instanceof ObsException) {
         throw (ObsException) e.getCause();
       }
@@ -3116,24 +3574,42 @@ public class OBSFileSystem extends FileSystem {
 
   // Used to create a folder
   private void fsCreateFolder(final String objectName) throws ObsException, InterruptedIOException {
-    try {
-      final NewFolderRequest newFolderRequest = new NewFolderRequest(bucket, objectName);
-      newFolderRequest.setAcl(cannedACL);
-      long len = newFolderRequest.getObjectKey().length();
-      incrementPutStartStatistics(len);
-      ListenableFuture<ObsFSFolder> future = null;
-      try {
-        future =
-            boundedThreadPool.submit(
-                new Callable<ObsFSFolder>() {
-                  @Override
-                  public ObsFSFolder call() throws ObsException {
-                    return obs.newFolder(newFolderRequest);
-                  }
-                });
-      } catch (ObsException e) {
-        throw e;
+    for (int retryTime = 1; retryTime < MAX_RETRY_TIME; retryTime++) {
+      try
+      {
+        innerFsCreateFolder(objectName);
+        return;
       }
+      catch (ObsException e)
+      {
+        LOG.warn("Failed to create folder [{}], retry time [{}], " +
+                "exception [{}]", objectName, retryTime, e);
+        try {
+          Thread.sleep(DELAY_TIME);
+        } catch (InterruptedException ie) {
+          throw e;
+        }
+      }
+    }
+
+    innerFsCreateFolder(objectName);
+  }
+
+  private void innerFsCreateFolder(final String objectName) throws ObsException, InterruptedIOException {
+    final NewFolderRequest newFolderRequest = new NewFolderRequest(bucket, objectName);
+    newFolderRequest.setAcl(cannedACL);
+    long len = newFolderRequest.getObjectKey().length();
+    incrementPutStartStatistics(len);
+    ListenableFuture<ObsFSFolder> future = null;
+    future =
+            boundedThreadPool.submit(
+                    new Callable<ObsFSFolder>() {
+                      @Override
+                      public ObsFSFolder call() throws ObsException {
+                        return obs.newFolder(newFolderRequest);
+                      }
+                    });
+    try {
       future.get();
       incrementPutCompletedStatistics(true, 0);
     } catch (InterruptedException e) {
@@ -3141,6 +3617,7 @@ public class OBSFileSystem extends FileSystem {
       throw new InterruptedIOException("Create Folder has Interrupted creating " + objectName);
     } catch (ExecutionException e) {
       incrementPutCompletedStatistics(false, 0);
+      future.cancel(true);
       if (e.getCause() instanceof ObsException) {
         throw (ObsException) e.getCause();
       }

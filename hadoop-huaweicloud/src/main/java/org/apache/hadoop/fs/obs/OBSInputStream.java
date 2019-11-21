@@ -57,7 +57,8 @@ import static org.apache.hadoop.fs.obs.OBSUtils.translateException;
 @InterfaceStability.Evolving
 public class OBSInputStream extends FSInputStream implements CanSetReadahead {
   public static final Logger LOG = OBSFileSystem.LOG;
-  private static final int RETRY_TIME = 9;
+  private static final int READ_RETRY_TIME = 3;
+  private static final int SEEK_RETRY_TIME = 9;
   private static final int DELAY_TIME = 10;
   private final FileSystem.Statistics statistics;
   private final ObsClient client;
@@ -233,30 +234,36 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead {
       // forward seek -this is where data can be skipped
 
       int available = wrappedStream.available();
-      // always seek at least as far as what is available
-      long forwardSeekRange = Math.max(readahead, available);
-      // work out how much is actually left in the stream
-      // then choose whichever comes first: the range or the EOF
-      long remainingInCurrentRequest = remainingInCurrentRequest();
+      if (available < diff) {
+        // log a warning; continue to attempt to re-open
+        LOG.info("Available size {} little than target. can not to seek on {} to {}. Current position {}. " +
+                "must close the current stream.", available, uri, targetPos, pos);
+      } else {
+        // always seek at least as far as what is available
+        long forwardSeekRange = Math.max(readahead, available);
+        // work out how much is actually left in the stream
+        // then choose whichever comes first: the range or the EOF
+        long remainingInCurrentRequest = remainingInCurrentRequest();
 
-      long forwardSeekLimit = Math.min(remainingInCurrentRequest, forwardSeekRange);
-      boolean skipForward = remainingInCurrentRequest > 0 && diff <= forwardSeekLimit;
-      if (skipForward) {
-        // the forward seek range is within the limits
-        LOG.debug("Forward seek on {}, of {} bytes", uri, diff);
-        long skipped = wrappedStream.skip(diff);
-        if (skipped > 0) {
-          pos += skipped;
-          // as these bytes have been read, they are included in the counter
-          incrementBytesRead(diff);
-        }
+        long forwardSeekLimit = Math.min(remainingInCurrentRequest, forwardSeekRange);
+        boolean skipForward = remainingInCurrentRequest > 0 && diff <= forwardSeekLimit;
+        if (skipForward) {
+          // the forward seek range is within the limits
+          LOG.debug("Forward seek on {}, of {} bytes", uri, diff);
+          long skipped = wrappedStream.skip(diff);
+          if (skipped > 0) {
+            pos += skipped;
+            // as these bytes have been read, they are included in the counter
+            incrementBytesRead(skipped);
+          }
 
-        if (pos == targetPos) {
-          // all is well
-          return;
-        } else {
-          // log a warning; continue to attempt to re-open
-          LOG.warn("Failed to seek on {} to {}. Current position {}", uri, targetPos, pos);
+          if (pos == targetPos) {
+            // all is well
+            return;
+          } else {
+            // log a warning; continue to attempt to re-open
+            LOG.info("Failed to seek on {} to {}. Current position {}", uri, targetPos, pos);
+          }
         }
       }
     } else if (diff < 0) {
@@ -287,7 +294,7 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead {
    * @param len length of the content that needs to be read
    */
   private void lazySeek(long targetPos, long len) throws IOException {
-    for (int i = 0; i < RETRY_TIME; i++) {
+    for (int i = 0; i < SEEK_RETRY_TIME; i++) {
       try {
         // For lazy seek
         seekInStream(targetPos, len);
@@ -300,7 +307,7 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead {
         break;
       } catch (OBSIOException e) {
         LOG.warn("OBSIOException occurred in lazySeek, retry: {}", i, e);
-        if (i == RETRY_TIME - 1) {
+        if (i == SEEK_RETRY_TIME - 1) {
           throw e;
         }
         try {
@@ -331,15 +338,41 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead {
       return -1;
     }
 
-    int byteRead;
+    int byteRead = -1;
     try {
       lazySeek(nextReadPos, 1);
-      byteRead = wrappedStream.read();
     } catch (EOFException e) {
-      return -1;
-    } catch (IOException e) {
       onReadFailure(e, 1);
-      byteRead = wrappedStream.read();
+      return -1;
+    }
+
+    IOException exception = null;
+    for (int retryTime = 1; retryTime <= READ_RETRY_TIME; retryTime++) {
+      try {
+        byteRead = wrappedStream.read();
+        exception = null;
+        break;
+      } catch (EOFException e) {
+        onReadFailure(e, 1);
+        return -1;
+      } catch (IOException e) {
+        exception = e;
+        onReadFailure(e, 1);
+        LOG.warn("read of [{}] failed, retry time[{}], due to exception[{}]", uri, retryTime, exception);
+        if (retryTime < READ_RETRY_TIME) {
+          try {
+            Thread.sleep(DELAY_TIME);
+          } catch (InterruptedException ie) {
+            LOG.error("read of [{}] failed, retry time[{}], due to exception[{}]", uri, retryTime, exception);
+            throw exception;
+          }
+        }
+      }
+    }
+
+    if (exception != null) {
+      LOG.error("read of [{}] failed, retry time[{}], due to exception[{}]", uri, READ_RETRY_TIME, exception);
+      throw exception;
     }
 
     if (byteRead >= 0) {
@@ -391,20 +424,43 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead {
     try {
       lazySeek(nextReadPos, len);
     } catch (EOFException e) {
+      onReadFailure(e, len);
       // the end of the file has moved
       return -1;
     }
 
-    int bytesRead;
-    try {
-      bytesRead = wrappedStream.read(buf, off, len);
-    } catch (EOFException e) {
-      onReadFailure(e, len);
-      // the base implementation swallows EOFs.
-      return -1;
-    } catch (IOException e) {
-      onReadFailure(e, len);
-      bytesRead = wrappedStream.read(buf, off, len);
+    int bytesRead = -1;
+    IOException exception = null;
+    for (int retryTime = 1; retryTime <= READ_RETRY_TIME; retryTime++) {
+      try {
+        bytesRead = wrappedStream.read(buf, off, len);
+        exception = null;
+        break;
+      } catch (EOFException e) {
+        onReadFailure(e, len);
+        // the base implementation swallows EOFs.
+        return -1;
+      } catch (IOException e) {
+        exception = e;
+        onReadFailure(e, len);
+        LOG.warn("read offset[{}] len[{}] of [{}] failed, retry time[{}], due to exception[{}]",
+                  off,len, uri, retryTime, exception);
+        if (retryTime < READ_RETRY_TIME) {
+          try {
+            Thread.sleep(DELAY_TIME);
+          } catch (InterruptedException ie) {
+            LOG.error("read offset[{}] len[{}] of [{}] failed, retry time[{}], due to exception[{}]",
+                      off,len, uri, retryTime, exception);
+            throw exception;
+          }
+        }
+      }
+    }
+
+    if (exception != null) {
+      LOG.error("read offset[{}] len[{}] of [{}] failed, retry time[{}], due to exception[{}]",
+                off,len, uri, READ_RETRY_TIME, exception);
+      throw exception;
     }
 
     if (bytesRead > 0) {
@@ -619,36 +675,62 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead {
     validatePositionedReadArgs(position, buffer, offset, length);
 
     int len = 0;
+    int nbytes = -1;
     InputStream inputStream = null;
-    try {
-      GetObjectRequest request = new GetObjectRequest(bucket, key);
-      request.setRangeStart(position);
-      request.setRangeEnd(position + length);
-      if (fs.getSse().isSseCEnable()) {
-        request.setSseCHeader(fs.getSse().getSseCHeader());
-      }
-      inputStream = client.getObject(request).getObjectContent();
-      if (inputStream == null) {
-        throw new IOException("Null IO stream from read of " + uri);
-      }
+    IOException exception = null;
+    GetObjectRequest request = new GetObjectRequest(bucket, key);
+    request.setRangeStart(position);
+    request.setRangeEnd(position + length);
+    if (fs.getSse().isSseCEnable()) {
+      request.setSseCHeader(fs.getSse().getSseCHeader());
+    }
 
-      while (len < length) {
-        int nbytes = inputStream.read(buffer, offset + len, length - len);
-        if (nbytes < 0) {
-          throw new EOFException(FSExceptionMessages.EOF_IN_READ_FULLY);
+    for (int retryTime = 1; retryTime <= READ_RETRY_TIME; retryTime++) {
+      try {
+        inputStream = client.getObject(request).getObjectContent();
+        if (inputStream == null) {
+          break;
         }
+        while (len < length) {
+          nbytes = inputStream.read(buffer, offset + len, length - len);
+          if (nbytes < 0) {
+            throw new EOFException(FSExceptionMessages.EOF_IN_READ_FULLY);
+          }
 
-        len += nbytes;
-      }
-
-      LOG.debug("Read uri:{}, position:{}, offset:{}, length:{}", uri, position, offset, len);
-    } catch (ObsException e) {
-      throw translateException("Read at position " + position, uri, e);
-    } finally {
-      if (null != inputStream) {
-        inputStream.close();
+          len += nbytes;
+        }
+        exception = null;
+        break;
+      } catch (ObsException | IOException e) {
+        if (e instanceof ObsException) {
+          exception = translateException("Read at position " + position, uri, (ObsException) e);
+        }
+        LOG.warn("read position[{}] offset[{}] len[{}] of [{}] failed, retry time[{}], due to exception[{}]",
+                  position, offset,len, uri, retryTime, exception);
+        if (retryTime < READ_RETRY_TIME) {
+          try {
+            Thread.sleep(DELAY_TIME);
+          } catch (InterruptedException ie) {
+            LOG.error("read position[{}] offset[{}] len[{}] of [{}] failed, retry time[{}], due to exception[{}]",
+                    position, offset,len, uri, retryTime, exception);
+            throw exception;
+          }
+        }
+      } finally {
+        if (inputStream != null) {
+          inputStream.close();
+        }
+        len = 0;
       }
     }
+
+    if (inputStream == null || exception != null) {
+      LOG.error("read position[{}] offset[{}] len[{}] failed, retry time[{}], due to exception[{}]",
+              position, offset,len, READ_RETRY_TIME, exception);
+      throw new IOException("read failed of " + uri + ", inputStream is "
+                  + inputStream == null ? "null" : "not null", exception);
+    }
+    LOG.debug("Read uri:{}, position:{}, offset:{}, length:{}", uri, position, offset, len);
 
     return len;
   }

@@ -18,6 +18,7 @@
 
 package org.apache.hadoop.fs.obs;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import org.apache.hadoop.fs.FSExceptionMessages;
 import org.apache.hadoop.util.DirectBufferPool;
@@ -29,6 +30,8 @@ import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.apache.hadoop.fs.obs.Constants.FAST_UPLOAD_BUFFER_ARRAY_FIRST_BLOCK_SIZE;
+import static org.apache.hadoop.fs.obs.Constants.FAST_UPLOAD_BUFFER_ARRAY_FIRST_BLOCK_SIZE_DEFAULT;
 import static org.apache.hadoop.fs.obs.OBSDataBlocks.DataBlock.DestState.*;
 import static org.apache.hadoop.fs.obs.OBSUtils.closeAll;
 
@@ -348,7 +351,9 @@ final class OBSDataBlocks {
 
     @Override
     DataBlock create(long index, int limit) throws IOException {
-      return new ByteArrayBlock(0, limit);
+      int firstBlockSize = super.owner.getConf().getInt(FAST_UPLOAD_BUFFER_ARRAY_FIRST_BLOCK_SIZE,
+              FAST_UPLOAD_BUFFER_ARRAY_FIRST_BLOCK_SIZE_DEFAULT);
+      return new ByteArrayBlock(0, limit, firstBlockSize);
     }
   }
 
@@ -384,6 +389,25 @@ final class OBSDataBlocks {
     private OBSByteArrayOutputStream buffer;
     // cache data size so that it is consistent after the buffer is reset.
     private Integer dataSize;
+    // block first size
+    private int firstBlockSize;
+
+    ByteArrayBlock(long index, int limit, int firstBlockSize) {
+      super(index);
+      this.limit = limit;
+      this.buffer = new OBSByteArrayOutputStream(firstBlockSize);
+      this.firstBlockSize = firstBlockSize;
+    }
+
+    /**
+     * Returns the block first block size
+     *
+     * @return the block first block size
+     */
+    @VisibleForTesting
+    public int firstBlockSize() {
+      return this.firstBlockSize;
+    }
 
     ByteArrayBlock(long index, int limit) {
       super(index);
