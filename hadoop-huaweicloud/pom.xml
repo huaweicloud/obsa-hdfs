@@ -18,7 +18,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>org.apache.hadoop</groupId>
   <artifactId>hadoop-huaweicloud</artifactId>
-  <version>3.1.1.28</version>
+  <version>2.8.3.30</version>
   <name>Apache Hadoop OBS support</name>
   <description>
     This module contains code to support integration with OBS.
@@ -30,10 +30,84 @@
     <file.encoding>UTF-8</file.encoding>
     <downloadSources>true</downloadSources>
     <hadoop.tmp.dir>${project.build.directory}/test</hadoop.tmp.dir>
-
+    <hadoop.version>2.8.3</hadoop.version>
+    <esdk.version>3.19.7</esdk.version>
   </properties>
 
   <profiles>
+    <profile>
+      <id>MRS-hadoop2</id>
+      <properties>
+        <hadoop.version>2.8.3</hadoop.version>
+        <esdk.version>3.19.7</esdk.version>
+        <shading.prefix>obs.shaded</shading.prefix>
+      </properties>
+      <repositories>
+        <repository>
+          <id>HuaweiCloudSDK</id>
+          <url>https://mirrors.huaweicloud.com/repository/maven/huaweicloudsdk/</url>
+        </repository>
+      </repositories>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-shade-plugin</artifactId>
+            <executions>
+              <execution>
+                <id>shade-obs-fs</id>
+                <phase>package</phase>
+                <goals>
+                  <goal>shade</goal>
+                </goals>
+                <configuration>
+                  <relocations>
+                    <relocation>
+                      <!-- shade java-xmlbuilder -->
+                      <pattern>com.jamesmurty.utils</pattern>
+                      <shadedPattern>${shading.prefix}.com.jamesmurty.utils</shadedPattern>
+                    </relocation>
+                    <relocation>
+                      <!-- shade okio -->
+                      <pattern>okio</pattern>
+                      <shadedPattern>${shading.prefix}.okio</shadedPattern>
+                    </relocation>
+                    <relocation>
+                      <!-- shade okhttp -->
+                      <pattern>okhttp3</pattern>
+                      <shadedPattern>${shading.prefix}.okhttp3</shadedPattern>
+                    </relocation>
+                  </relocations>
+                  <transformers>
+                    <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer" />
+                  </transformers>
+                  <artifactSet>
+                    <includes>
+                      <include>com.jamesmurty.utils:*</include>
+                      <include>com.squareup.okio:*</include>
+                      <include>com.squareup.okhttp3:*</include>
+                      <include>com.huawei.storage:esdk-obs-java</include>
+                      <include>org.apache.hadoop:hadoop-huaweicloud</include>
+                    </includes>
+                  </artifactSet>
+                  <filters>
+                    <!-- Exclude signatures -->
+                    <filter>
+                      <artifact>*:*</artifact>
+                      <excludes>
+                        <exclude>META-INF/*.SF</exclude>
+                        <exclude>META-INF/*.DSA</exclude>
+                        <exclude>META-INF/*.RSA</exclude>
+                      </excludes>
+                    </filter>
+                  </filters>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
     <profile>
       <id>tests-off</id>
       <activation>
@@ -237,7 +311,6 @@
         <artifactId>maven-project-info-reports-plugin</artifactId>
         <configuration>
           <dependencyDetailsEnabled>false</dependencyDetailsEnabled>
-          <!--<dependencyLocationsEnabled>false</dependencyLocationsEnabled>-->
         </configuration>
       </plugin>
       <plugin>
@@ -292,7 +365,7 @@
     <dependency>
       <groupId>org.apache.hadoop</groupId>
       <artifactId>hadoop-common</artifactId>
-      <version>3.1.1</version>
+      <version>${hadoop.version}</version>
       <scope>compile</scope>
       <exclusions>
       	<exclusion>
@@ -304,29 +377,9 @@
     <dependency>
       <groupId>org.apache.hadoop</groupId>
       <artifactId>hadoop-common</artifactId>
-      <version>3.1.1</version>
+      <version>${hadoop.version}</version>
       <scope>test</scope>
       <type>test-jar</type>
-    </dependency>
-    <dependency>
-      <groupId>com.fasterxml.jackson.core</groupId>
-      <artifactId>jackson-core</artifactId>
-      <version>2.2.3</version>
-    </dependency>
-    <dependency>
-      <groupId>com.fasterxml.jackson.core</groupId>
-      <artifactId>jackson-databind</artifactId>
-      <version>2.9.10</version>
-    </dependency>
-    <dependency>
-      <groupId>com.fasterxml.jackson.core</groupId>
-      <artifactId>jackson-annotations</artifactId>
-      <version>2.2.3</version>
-    </dependency>
-    <dependency>
-      <groupId>joda-time</groupId>
-      <artifactId>joda-time</artifactId>
-      <version>2.9.4</version>
     </dependency>
     <dependency>
       <groupId>junit</groupId>
@@ -343,40 +396,52 @@
     <dependency>
       <groupId>org.apache.hadoop</groupId>
       <artifactId>hadoop-mapreduce-client-jobclient</artifactId>
-      <version>3.1.1</version>
+      <version>${hadoop.version}</version>
       <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>org.apache.hadoop</groupId>
       <artifactId>hadoop-yarn-server-tests</artifactId>
-      <version>3.1.1</version>
+      <version>${hadoop.version}</version>
       <scope>test</scope>
       <type>test-jar</type>
     </dependency>
     <dependency>
       <groupId>org.apache.hadoop</groupId>
       <artifactId>hadoop-mapreduce-examples</artifactId>
-      <version>3.1.1</version>
+      <version>${hadoop.version}</version>
       <scope>test</scope>
       <type>jar</type>
     </dependency>
     <dependency>
       <groupId>org.apache.hadoop</groupId>
       <artifactId>hadoop-distcp</artifactId>
-      <version>3.1.1</version>
+      <version>${hadoop.version}</version>
       <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>org.apache.hadoop</groupId>
       <artifactId>hadoop-distcp</artifactId>
-      <version>3.1.1</version>
+      <version>${hadoop.version}</version>
       <scope>test</scope>
       <type>test-jar</type>
     </dependency>
     <dependency>
       <groupId>com.huawei.storage</groupId>
       <artifactId>esdk-obs-java</artifactId>
-      <version>3.19.7</version>
+      <version>${esdk.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.powermock</groupId>
+      <artifactId>powermock-api-mockito</artifactId>
+      <version>1.7.4</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.powermock</groupId>
+      <artifactId>powermock-module-junit4</artifactId>
+      <version>1.7.4</version>
+      <scope>test</scope>
     </dependency>
   </dependencies>
 </project>
