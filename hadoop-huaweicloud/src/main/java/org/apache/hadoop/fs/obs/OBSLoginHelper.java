@@ -34,265 +34,320 @@ import java.util.Objects;
 import static org.apache.commons.lang.StringUtils.equalsIgnoreCase;
 
 /**
- * Class to aid logging in to OBS endpoints. It is in OBS so that it can be used across all OBS
- * filesystems.
+ * Helper for OBS login.
  */
-public final class OBSLoginHelper {
-  public static final String LOGIN_WARNING =
-      "The Filesystem URI contains login details."
-          + " This is insecure and may be unsupported in future.";
-  public static final String PLUS_WARNING =
-      "Secret key contains a special character that should be URL encoded! "
-          + "Attempting to resolve...";
-  public static final String PLUS_UNENCODED = "+";
-  public static final String PLUS_ENCODED = "%2B";
-  private static final Logger LOG = LoggerFactory.getLogger(OBSLoginHelper.class);
+final class OBSLoginHelper {
+    /**
+     * login warning.
+     */
+    public static final String LOGIN_WARNING =
+        "The Filesystem URI contains login details."
+            + " This is insecure and may be unsupported in future.";
 
-  private OBSLoginHelper() {}
+    /**
+     * plus warning.
+     */
+    public static final String PLUS_WARNING =
+        "Secret key contains a special character that should be URL encoded! "
+            + "Attempting to resolve...";
 
-  /**
-   * Build the filesystem URI. This can include stripping down of part of the URI.
-   *
-   * @param uri filesystem uri
-   * @return the URI to use as the basis for FS operation and qualifying paths.
-   * @throws IllegalArgumentException if the URI is in some way invalid.
-   */
-  public static URI buildFSURI(URI uri) {
-    Objects.requireNonNull(uri, "null uri");
-    Objects.requireNonNull(uri.getScheme(), "null uri.getScheme()");
-    if (uri.getHost() == null && uri.getAuthority() != null) {
-      Objects.requireNonNull(
-          uri.getHost(),
-          "null uri host." + " This can be caused by unencoded / in the password string");
+    /**
+     * defined plus unencoded char.
+     */
+    public static final String PLUS_UNENCODED = "+";
+
+    /**
+     * defined plus encoded char.
+     */
+    public static final String PLUS_ENCODED = "%2B";
+
+    /**
+     * Class logger.
+     */
+    private static final Logger LOG = LoggerFactory.getLogger(
+        OBSLoginHelper.class);
+
+    private OBSLoginHelper() {
     }
-    Objects.requireNonNull(uri.getHost(), "null uri host.");
-    return URI.create(uri.getScheme() + "://" + uri.getHost());
-  }
 
-  /**
-   * Create a stripped down string value for error messages.
-   *
-   * @param pathUri URI
-   * @return a shortened schema://host/path value
-   */
-  public static String toString(URI pathUri) {
-    return pathUri != null
-        ? String.format("%s://%s/%s", pathUri.getScheme(), pathUri.getHost(), pathUri.getPath())
-        : "(null URI)";
-  }
-
-  /**
-   * Extract the login details from a URI, logging a warning if the URI contains these.
-   *
-   * @param name URI of the filesystem
-   * @return a login tuple, possibly empty.
-   */
-  public static Login extractLoginDetailsWithWarnings(URI name) {
-    Login login = extractLoginDetails(name);
-    if (login.hasLogin()) {
-      LOG.warn(LOGIN_WARNING);
-    }
-    return login;
-  }
-
-  /**
-   * Extract the login details from a URI.
-   *
-   * @param name URI of the filesystem
-   * @return a login tuple, possibly empty.
-   */
-  public static Login extractLoginDetails(URI name) {
-    try {
-      String authority = name.getAuthority();
-      if (authority == null) {
-        return Login.EMPTY;
-      }
-      int loginIndex = authority.indexOf('@');
-      if (loginIndex < 0) {
-        // no login
-        return Login.EMPTY;
-      }
-      String login = authority.substring(0, loginIndex);
-      int loginSplit = login.indexOf(':');
-      if (loginSplit > 0) {
-        String user = login.substring(0, loginSplit);
-        String encodedPassword = login.substring(loginSplit + 1);
-        if (encodedPassword.contains(PLUS_UNENCODED)) {
-          LOG.warn(PLUS_WARNING);
-          encodedPassword = encodedPassword.replaceAll("\\" + PLUS_UNENCODED, PLUS_ENCODED);
-        }
-        String password = URLDecoder.decode(encodedPassword, "UTF-8");
-        return new Login(user, password);
-      } else if (loginSplit == 0) {
-        // there is no user, just a password. In this case, there's no login
-        return Login.EMPTY;
-      } else {
-        return new Login(login, "");
-      }
-    } catch (UnsupportedEncodingException e) {
-      // this should never happen; translate it if it does.
-      throw new RuntimeException(e);
-    }
-  }
-
-  /**
-   * Canonicalize the given URI.
-   *
-   * <p>This strips out login information.
-   *
-   * @param uri the URI to canonicalize
-   * @param defaultPort default port to use in canonicalized URI if the input URI has no port and
-   *     this value is greater than 0
-   * @return a new, canonicalized URI.
-   */
-  public static URI canonicalizeUri(URI uri, int defaultPort) {
-    if (uri.getPort() == -1 && defaultPort > 0) {
-      // reconstruct the uri with the default port set
-      try {
-        uri =
-            new URI(
-                uri.getScheme(),
-                null,
+    /**
+     * Build the filesystem URI. This can include stripping down of part of the
+     * URI.
+     *
+     * @param uri filesystem uri
+     * @return the URI to use as the basis for FS operation and qualifying
+     * paths.
+     * @throws IllegalArgumentException if the URI is in some way invalid.
+     */
+    public static URI buildFSURI(final URI uri) {
+        Objects.requireNonNull(uri, "null uri");
+        Objects.requireNonNull(uri.getScheme(), "null uri.getScheme()");
+        if (uri.getHost() == null && uri.getAuthority() != null) {
+            Objects.requireNonNull(
                 uri.getHost(),
-                defaultPort,
-                uri.getPath(),
-                uri.getQuery(),
-                uri.getFragment());
-      } catch (URISyntaxException e) {
-        // Should never happen!
-        throw new AssertionError("Valid URI became unparseable: " + uri);
-      }
-    }
-
-    return uri;
-  }
-
-  /**
-   * Check the path, ignoring authentication details. See {@link FileSystem#checkPath(Path)} for the
-   * operation of this.
-   *
-   * <p>Essentially
-   *
-   * <ol>
-   *   <li>The URI is canonicalized.
-   *   <li>If the schemas match, the hosts are compared.
-   *   <li>If there is a mismatch between null/non-null host, the default FS values are used to
-   *       patch in the host.
-   * </ol>
-   *
-   * That all originates in the core FS; the sole change here being to use {@link URI#getHost()}
-   * over {@link URI#getAuthority()}. Some of that code looks a relic of the code anti-pattern of
-   * using "hdfs:file.txt" to define the path without declaring the hostname. It's retained for
-   * compatibility.
-   *
-   * @param conf FS configuration
-   * @param fsUri the FS URI
-   * @param path path to check
-   * @param defaultPort default port of FS
-   */
-  public static void checkPath(Configuration conf, URI fsUri, Path path, int defaultPort) {
-    URI pathUri = path.toUri();
-    String thatScheme = pathUri.getScheme();
-    if (thatScheme == null) {
-      // fs is relative
-      return;
-    }
-    URI thisUri = canonicalizeUri(fsUri, defaultPort);
-    String thisScheme = thisUri.getScheme();
-    // hostname and scheme are not case sensitive in these checks
-    if (equalsIgnoreCase(thisScheme, thatScheme)) { // schemes match
-      String thisHost = thisUri.getHost();
-      String thatHost = pathUri.getHost();
-      if (thatHost == null
-          && // path's host is null
-          thisHost != null) { // fs has a host
-        URI defaultUri = FileSystem.getDefaultUri(conf);
-        if (equalsIgnoreCase(thisScheme, defaultUri.getScheme())) {
-          pathUri = defaultUri; // schemes match, so use this uri instead
-        } else {
-          pathUri = null; // can't determine auth of the path
+                "null uri host."
+                    + " This can be caused by unencoded / in the "
+                    + "password string");
         }
-      }
-      if (pathUri != null) {
-        // canonicalize uri before comparing with this fs
-        pathUri = canonicalizeUri(pathUri, defaultPort);
-        thatHost = pathUri.getHost();
-        if (thisHost == thatHost
-            || // hosts match
-            (thisHost != null && equalsIgnoreCase(thisHost, thatHost))) {
-          return;
-        }
-      }
-    }
-    // make sure the exception strips out any auth details
-    throw new IllegalArgumentException(
-        "Wrong FS " + OBSLoginHelper.toString(pathUri) + " -expected " + fsUri);
-  }
-
-  /** Simple tuple of login details. */
-  public static class Login {
-    public static final Login EMPTY = new Login();
-    private final String user;
-    private final String password;
-    private final String token;
-
-    /** Create an instance with no login details. Calls to {@link #hasLogin()} return false. */
-    public Login() {
-      this("", "");
-    }
-
-    public Login(String user, String password) {
-      this(user, password, null);
-    }
-
-    public Login(String user, String password, String token) {
-      this.user = user;
-      this.password = password;
-      this.token = token;
+        Objects.requireNonNull(uri.getHost(), "null uri host.");
+        return URI.create(uri.getScheme() + "://" + uri.getHost());
     }
 
     /**
-     * Predicate to verify login details are defined.
+     * Create a stripped down string value for error messages.
      *
-     * @return true if the username is defined (not null, not empty).
+     * @param pathUri URI
+     * @return a shortened schema://host/path value
      */
-    public boolean hasLogin() {
-      return StringUtils.isNotEmpty(user);
+    public static String toString(final URI pathUri) {
+        return pathUri != null
+            ? String.format("%s://%s/%s", pathUri.getScheme(),
+            pathUri.getHost(), pathUri.getPath())
+            : "(null URI)";
     }
 
     /**
-     * Equality test matches user and password.
+     * Extract the login details from a URI, logging a warning if the URI
+     * contains these.
      *
-     * @param o other object
-     * @return true if the objects are considered equivalent.
+     * @param name URI of the filesystem
+     * @return a login tuple, possibly empty.
      */
-    @Override
-    public boolean equals(Object o) {
-      if (this == o) {
-        return true;
-      }
-      if (o == null || getClass() != o.getClass()) {
-        return false;
-      }
-      Login that = (Login) o;
-      return Objects.equals(user, that.user) && Objects.equals(password, that.password);
+    public static Login extractLoginDetailsWithWarnings(final URI name) {
+        Login login = extractLoginDetails(name);
+        if (login.hasLogin()) {
+            LOG.warn(LOGIN_WARNING);
+        }
+        return login;
     }
 
-    @Override
-    public int hashCode() {
-      return Objects.hash(user, password);
+    /**
+     * Extract the login details from a URI.
+     *
+     * @param name URI of the filesystem
+     * @return a login tuple, possibly empty.
+     */
+    public static Login extractLoginDetails(final URI name) {
+        try {
+            String authority = name.getAuthority();
+            if (authority == null) {
+                return Login.EMPTY;
+            }
+            int loginIndex = authority.indexOf('@');
+            if (loginIndex < 0) {
+                // no login
+                return Login.EMPTY;
+            }
+            String login = authority.substring(0, loginIndex);
+            int loginSplit = login.indexOf(':');
+            if (loginSplit > 0) {
+                String user = login.substring(0, loginSplit);
+                String encodedPassword = login.substring(loginSplit + 1);
+                if (encodedPassword.contains(PLUS_UNENCODED)) {
+                    LOG.warn(PLUS_WARNING);
+                    encodedPassword = encodedPassword.replaceAll(
+                        "\\" + PLUS_UNENCODED, PLUS_ENCODED);
+                }
+                String password = URLDecoder.decode(encodedPassword, "UTF-8");
+                return new Login(user, password);
+            } else if (loginSplit == 0) {
+                // there is no user, just a password. In this case,
+                // there's no login
+                return Login.EMPTY;
+            } else {
+                return new Login(login, "");
+            }
+        } catch (UnsupportedEncodingException e) {
+            // this should never happen; translate it if it does.
+            throw new RuntimeException(e);
+        }
     }
 
-    public String getUser() {
-      return user;
+    /**
+     * Canonicalize the given URI.
+     *
+     * <p>This strips out login information.
+     *
+     * @param uri         the URI to canonicalize
+     * @param defaultPort default port to use in canonicalized URI if the input
+     *                    URI has no port and this value is greater than 0
+     * @return a new, canonicalized URI.
+     */
+    public static URI canonicalizeUri(final URI uri, final int defaultPort) {
+        URI newUri = uri;
+        if (uri.getPort() == -1 && defaultPort > 0) {
+            // reconstruct the uri with the default port set
+            try {
+                newUri =
+                    new URI(
+                        newUri.getScheme(),
+                        null,
+                        newUri.getHost(),
+                        defaultPort,
+                        newUri.getPath(),
+                        newUri.getQuery(),
+                        newUri.getFragment());
+            } catch (URISyntaxException e) {
+                // Should never happen!
+                throw new AssertionError(
+                    "Valid URI became unparseable: " + newUri);
+            }
+        }
+
+        return newUri;
     }
 
-    public String getPassword() {
-      return password;
+    /**
+     * Check the path, ignoring authentication details. See {@link
+     * OBSFileSystem#checkPath(Path)} for the operation of this.
+     *
+     * <p>Essentially
+     *
+     * <ol>
+     * <li>The URI is canonicalized.
+     * <li>If the schemas match, the hosts are compared.
+     * <li>If there is a mismatch between null/non-null host,
+     * the default FS values are used to
+     * patch in the host.
+     * </ol>
+     * <p>
+     * That all originates in the core FS; the sole change here being to
+     * use {@link URI#getHost()}over {@link URI#getAuthority()}.
+     * Some of that code looks a relic of the code anti-pattern of using
+     * "hdfs:file.txt" to define the path without declaring the hostname.
+     * It's retained for compatibility.
+     *
+     * @param conf        FS configuration
+     * @param fsUri       the FS URI
+     * @param path        path to check
+     * @param defaultPort default port of FS
+     */
+    public static void checkPath(final Configuration conf, final URI fsUri,
+        final Path path, final int defaultPort) {
+        URI pathUri = path.toUri();
+        String thatScheme = pathUri.getScheme();
+        if (thatScheme == null) {
+            // fs is relative
+            return;
+        }
+        URI thisUri = canonicalizeUri(fsUri, defaultPort);
+        String thisScheme = thisUri.getScheme();
+        // hostname and scheme are not case sensitive in these checks
+        if (equalsIgnoreCase(thisScheme, thatScheme)) { // schemes match
+            String thisHost = thisUri.getHost();
+            String thatHost = pathUri.getHost();
+            if (thatHost == null
+                && // path's host is null
+                thisHost != null) { // fs has a host
+                URI defaultUri = FileSystem.getDefaultUri(conf);
+                if (equalsIgnoreCase(thisScheme, defaultUri.getScheme())) {
+                    pathUri
+                        = defaultUri; // schemes match, so use this uri instead
+                } else {
+                    pathUri = null; // can't determine auth of the path
+                }
+            }
+            if (pathUri != null) {
+                // canonicalize uri before comparing with this fs
+                pathUri = canonicalizeUri(pathUri, defaultPort);
+                thatHost = pathUri.getHost();
+                if (equalsIgnoreCase(thisHost, thatHost)) {
+                    return;
+                }
+            }
+        }
+        // make sure the exception strips out any auth details
+        throw new IllegalArgumentException(
+            "Wrong FS " + OBSLoginHelper.toString(pathUri) + " -expected "
+                + fsUri);
     }
 
-    public String getToken() {
-      return token;
+    /**
+     * Simple tuple of login details.
+     */
+    public static class Login {
+        /**
+         * Defined empty login instance.
+         */
+        public static final Login EMPTY = new Login();
+
+        /**
+         * Defined user name.
+         */
+        private final String user;
+
+        /**
+         * Defined password.
+         */
+        private final String password;
+
+        /**
+         * Login token.
+         */
+        private final String token;
+
+        /**
+         * Create an instance with no login details. Calls to {@link
+         * #hasLogin()} return false.
+         */
+        Login() {
+            this("", "");
+        }
+
+        Login(final String userName, final String passwd) {
+            this(userName, passwd, null);
+        }
+
+        Login(final String userName, final String passwd,
+            final String sessionToken) {
+            this.user = userName;
+            this.password = passwd;
+            this.token = sessionToken;
+        }
+
+        /**
+         * Predicate to verify login details are defined.
+         *
+         * @return true if the username is defined (not null, not empty).
+         */
+        public boolean hasLogin() {
+            return StringUtils.isNotEmpty(user);
+        }
+
+        /**
+         * Equality test matches user and password.
+         *
+         * @param o other object
+         * @return true if the objects are considered equivalent.
+         */
+        @Override
+        public boolean equals(final Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            Login that = (Login) o;
+            return Objects.equals(user, that.user) && Objects.equals(password,
+                that.password);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(user, password);
+        }
+
+        public String getUser() {
+            return user;
+        }
+
+        public String getPassword() {
+            return password;
+        }
+
+        public String getToken() {
+            return token;
+        }
     }
-  }
 }

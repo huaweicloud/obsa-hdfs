@@ -24,134 +24,69 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
 
 /**
- * File status for an OBS "file". Modification time is trouble, see {@link #getModificationTime()}.
+ * File status for an OBS file.
  *
  * <p>The subclass is private as it should not be created directly.
  */
 @InterfaceAudience.Private
 @InterfaceStability.Evolving
-public class OBSFileStatus extends FileStatus {
-  private int isEmptyDirectoryStatus;
-
-  /**
-   * Create a directory status.
-   *
-   * @param isemptydir is this an empty directory?
-   * @param path the path
-   * @param owner the owner
-   */
-  public OBSFileStatus(boolean isemptydir, Path path, String owner) {
-    super(0, true, 1, 0, 0, path);
-    isEmptyDirectoryStatus = isemptydir? 1 : 0;
-    setOwner(owner);
-    setGroup(owner);
-  }
-
-  /**
-   * Create a directory status.
-   *
-   * @param isemptydir is this an empty directory?
-   * @param path the path
-   * @param owner the owner
-   */
-  public OBSFileStatus(boolean isemptydir, Path path, long modificationTime, String owner) {
-    super(0, true, 1, 0, modificationTime, path);
-    isEmptyDirectoryStatus = isemptydir? 1 : 0;
-    setOwner(owner);
-    setGroup(owner);
-  }
-
-  /**
-   * Create a directory status.
-   *
-   * @param isemptydir is this an empty directory?
-   * @param path the path
-   * @param owner the owner
-   */
-  public OBSFileStatus(Path path, String owner) {
-    super(0, true, 1, 0, 0, path);
-    isEmptyDirectoryStatus = -1;
-    setOwner(owner);
-    setGroup(owner);
-  }
-
-  /**
-   * Create a directory status.
-   *
-   * @param isemptydir is this an empty directory?
-   * @param path the path
-   * @param owner the owner
-   */
-  public OBSFileStatus(Path path, long modificationTime, String owner) {
-    super(0, true, 1, 0, modificationTime, path);
-    isEmptyDirectoryStatus = -1;
-    setOwner(owner);
-    setGroup(owner);
-  }
-
-  /**
-   * A simple file.
-   *
-   * @param length file length
-   * @param modification_time mod time
-   * @param path path
-   * @param blockSize block size
-   * @param owner owner
-   */
-  public OBSFileStatus(
-      long length, long modification_time, Path path, long blockSize, String owner) {
-    super(length, false, 1, blockSize, modification_time, path);
-    isEmptyDirectoryStatus = -1;
-    setOwner(owner);
-    setGroup(owner);
-  }
-
-  public int isEmptyDirectoryStatus() {
-    return isEmptyDirectoryStatus;
-  }
-
-  /**
-   * Compare if this object is equal to another object.
-   *
-   * @param o the object to be compared.
-   * @return true if two file status has the same path name; false if not.
-   */
-  @Override
-  public boolean equals(Object o) {
-    return super.equals(o);
-  }
-
-  /**
-   * Returns a hash code value for the object, which is defined as the hash code of the path name.
-   *
-   * @return a hash code value for the path name.
-   */
-  @Override
-  public int hashCode() {
-    return super.hashCode();
-  }
-
-  /**
-   * Get the modification time of the file/directory.
-   *
-   * <p>obs uses objects as "fake" directories, which are not updated to reflect the accurate
-   * modification time. We choose to report the current time because some parts of the ecosystem
-   * (e.g. the HistoryServer) use modification time to ignore "old" directories.
-   *
-   * @return for files the modification time in milliseconds since January 1, 1970 UTC or for
-   *     directories the current time.
-   */
-  @Override
-  public long getModificationTime() {
-    if (isDirectory()) {
-      return System.currentTimeMillis();
-    } else {
-      return super.getModificationTime();
+class OBSFileStatus extends FileStatus {
+    /**
+     * Create a directory status.
+     *
+     * @param path  the path
+     * @param owner the owner
+     */
+    OBSFileStatus(final Path path, final String owner) {
+        super(0, true, 1, 0, 0, path);
+        setOwner(owner);
+        setGroup(owner);
     }
-  }
 
-  @Override
-  public String toString() {
-    return super.toString() + String.format(" isEmptyDirectoryStatus=%s", isEmptyDirectoryStatus());
-  }
+    /**
+     * Create a directory status.
+     *
+     * @param modificationTime modification time
+     * @param path             the path
+     * @param owner            the owner
+     */
+    OBSFileStatus(final Path path, final long modificationTime,
+        final String owner) {
+        super(0, true, 1, 0, modificationTime, path);
+        setOwner(owner);
+        setGroup(owner);
+    }
+
+    /**
+     * Create a directory status.
+     *
+     * @param modificationTime modification time
+     * @param accessTime       access time
+     * @param path             the path
+     * @param owner            the owner
+     */
+    OBSFileStatus(final Path path, final long modificationTime,
+        final long accessTime,
+        final String owner) {
+        super(0, true, 1, 0, modificationTime, accessTime, null, owner, owner,
+            path);
+    }
+
+    /**
+     * A simple file.
+     *
+     * @param length           file length
+     * @param modificationTime mod time
+     * @param path             path
+     * @param blockSize        block size
+     * @param owner            owner
+     */
+    OBSFileStatus(
+        final long length, final long modificationTime, final Path path,
+        final long blockSize,
+        final String owner) {
+        super(length, false, 1, blockSize, modificationTime, path);
+        setOwner(owner);
+        setGroup(owner);
+    }
 }

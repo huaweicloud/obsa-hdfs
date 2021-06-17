@@ -27,17 +27,27 @@ import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
 
-/** OBS implementation of AbstractFileSystem. This impl delegates to the OBSFileSystem */
+/**
+ * OBS implementation of AbstractFileSystem, which delegates to the {@link
+ * OBSFileSystem}.
+ */
 @InterfaceAudience.Public
 @InterfaceStability.Evolving
-public class OBS extends DelegateToFileSystem {
+public final class OBS extends DelegateToFileSystem {
 
-  public OBS(URI theUri, Configuration conf) throws IOException, URISyntaxException {
-    super(theUri, new OBSFileSystem(), conf, "obs", false);
-  }
+    /**
+     * @param theUri URI of the file system
+     * @param conf   Configuration for the file system
+     * @throws IOException        on any failure to initialize this instance
+     * @throws URISyntaxException <code>theUri</code> has syntax error
+     */
+    public OBS(final URI theUri, final Configuration conf)
+        throws IOException, URISyntaxException {
+        super(theUri, new OBSFileSystem(), conf, "obs", false);
+    }
 
-  @Override
-  public int getUriDefaultPort() {
-    return Constants.OBS_DEFAULT_PORT;
-  }
+    @Override
+    public int getUriDefaultPort() {
+        return OBSConstants.OBS_DEFAULT_PORT;
+    }
 }

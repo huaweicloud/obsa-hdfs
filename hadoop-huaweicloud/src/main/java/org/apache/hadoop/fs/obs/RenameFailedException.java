@@ -15,52 +15,43 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.hadoop.fs.obs;
 
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.PathIOException;
 
 /**
- * Error to indicate that a specific rename failed. The exit code defines the exit code to be
- * returned in the {@code rename()} call. Target path is set to destination.
+ * Exception to indicate a specific rename failure. The exit code defines the
+ * value returned by {@link OBSFileSystem#rename(Path, Path)}.
  */
-public class RenameFailedException extends PathIOException {
+class RenameFailedException extends PathIOException {
+    /**
+     * Exit code to be returned.
+     */
+    private boolean exitCode = false;
 
-  /** Exit code to be returned. */
-  private boolean exitCode = false;
-
-  public RenameFailedException(String src, String dest, Throwable cause) {
-    super(src, cause);
-    setOperation("rename");
-    setTargetPath(dest);
-  }
-
-  public RenameFailedException(String src, String dest, String error) {
-    super(src, error);
-    setOperation("rename");
-    setTargetPath(dest);
-  }
-
-  public RenameFailedException(Path src, Path optionalDest, String error) {
-    super(src.toString(), error);
-    setOperation("rename");
-    if (optionalDest != null) {
-      setTargetPath(optionalDest.toString());
+    RenameFailedException(final Path src, final Path optionalDest,
+        final String error) {
+        super(src.toString(), error);
+        setOperation("rename");
+        if (optionalDest != null) {
+            setTargetPath(optionalDest.toString());
+        }
     }
-  }
 
-  public boolean getExitCode() {
-    return exitCode;
-  }
+    public boolean getExitCode() {
+        return exitCode;
+    }
 
-  /**
-   * Set the exit code.
-   *
-   * @param code exit code to raise
-   * @return the exception
-   */
-  public RenameFailedException withExitCode(boolean code) {
-    this.exitCode = code;
-    return this;
-  }
+    /**
+     * Set the exit code.
+     *
+     * @param code exit code to raise
+     * @return the exception
+     */
+    public RenameFailedException withExitCode(final boolean code) {
+        this.exitCode = code;
+        return this;
+    }
 }

@@ -23,25 +23,32 @@ import com.obs.services.exception.ObsException;
 
 import java.io.IOException;
 
-/** IOException equivalent of an {@link ObsException}. */
-public class OBSIOException extends IOException {
+/**
+ * IOException equivalent to {@link ObsException}.
+ */
+class OBSIOException extends IOException {
+    private static final long serialVersionUID = -1582681108285856259L;
 
-  private static final long serialVersionUID = -1582681108285856259L;
-  private final String operation;
+    /**
+     * Peration message.
+     */
+    private final String operation;
 
-  public OBSIOException(String operation, ObsException cause) {
-    super(cause);
-    Preconditions.checkArgument(operation != null, "Null 'operation' argument");
-    Preconditions.checkArgument(cause != null, "Null 'cause' argument");
-    this.operation = operation;
-  }
+    OBSIOException(final String operationMsg, final ObsException cause) {
+        super(cause);
+        Preconditions.checkArgument(operationMsg != null,
+            "Null 'operation' argument");
+        Preconditions.checkArgument(cause != null, "Null 'cause' argument");
+        this.operation = operationMsg;
+    }
 
-  public ObsException getCause() {
-    return (ObsException) super.getCause();
-  }
+    public ObsException getCause() {
+        return (ObsException) super.getCause();
+    }
 
-  @Override
-  public String getMessage() {
-    return operation + ": " + getCause().getErrorMessage();
-  }
+    @Override
+    public String getMessage() {
+        return operation + ": " + getCause().getErrorMessage()
+            + ", detailMessage: " + super.getMessage();
+    }
 }

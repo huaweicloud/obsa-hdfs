@@ -18,28 +18,29 @@
 
 package org.apache.hadoop.fs.obs;
 
+import com.obs.services.ObsClient;
+
+import org.apache.hadoop.classification.InterfaceAudience;
+import org.apache.hadoop.classification.InterfaceStability;
+
+import java.io.IOException;
+import java.net.URI;
+
 /**
- * Interface class for getting basic session credential.
+ * Factory for creating OBS client instance to be used by {@link
+ * OBSFileSystem}.
  */
-public interface BasicSessionCredential {
+@InterfaceAudience.Private
+@InterfaceStability.Unstable
+interface OBSClientFactory {
     /**
-     * Get OBS access key.
+     * Creates a new {@link ObsClient} client. This method accepts the OBS file
+     * system URI both in raw input form and validated form as separate
+     * arguments, because both values may be useful in logging.
      *
-     * @return OBS access key
+     * @param name raw input OBS file system URI
+     * @return OBS client
+     * @throws IOException IO problem
      */
-    String getOBSAccessKeyId();
-
-    /**
-     * Get OBS secret key.
-     *
-     * @return OBS secret key
-     */
-    String getOBSSecretKey();
-
-    /**
-     * Get session token.
-     *
-     * @return session token
-     */
-    String getSessionToken();
+    ObsClient createObsClient(URI name) throws IOException;
 }

@@ -18,7 +18,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>org.apache.hadoop</groupId>
   <artifactId>hadoop-huaweicloud</artifactId>
-  <version>2.8.3.30</version>
+  <version>2.8.3-hw-42</version>
   <name>Apache Hadoop OBS support</name>
   <description>
     This module contains code to support integration with OBS.
@@ -30,24 +30,22 @@
     <file.encoding>UTF-8</file.encoding>
     <downloadSources>true</downloadSources>
     <hadoop.tmp.dir>${project.build.directory}/test</hadoop.tmp.dir>
-    <hadoop.version>2.8.3</hadoop.version>
-    <esdk.version>3.19.7</esdk.version>
+    <hadoop.plat.version>2.8.3</hadoop.plat.version>
+    <hadoop.version>2.8.3.0101-hw-ei-14</hadoop.version>
+    <obsa.version>42</obsa.version>
+    <esdk.version>3.20.6.1</esdk.version>
   </properties>
 
   <profiles>
     <profile>
-      <id>MRS-hadoop2</id>
+      <id>dist</id>
       <properties>
-        <hadoop.version>2.8.3</hadoop.version>
-        <esdk.version>3.19.7</esdk.version>
+        <hadoop.plat.version>2.8.3</hadoop.plat.version>
+        <hadoop.version>2.8.3.0101-hw-ei-14</hadoop.version>
+        <obsa.version>42</obsa.version>
+        <esdk.version>3.20.6.1</esdk.version>
         <shading.prefix>obs.shaded</shading.prefix>
       </properties>
-      <repositories>
-        <repository>
-          <id>HuaweiCloudSDK</id>
-          <url>https://mirrors.huaweicloud.com/repository/maven/huaweicloudsdk/</url>
-        </repository>
-      </repositories>
       <build>
         <plugins>
           <plugin>
@@ -73,9 +71,14 @@
                       <shadedPattern>${shading.prefix}.okio</shadedPattern>
                     </relocation>
                     <relocation>
-                      <!-- shade okhttp -->
+                      <!-- shade okio -->
                       <pattern>okhttp3</pattern>
                       <shadedPattern>${shading.prefix}.okhttp3</shadedPattern>
+                    </relocation>
+                    <relocation>
+                      <!-- shade jackson -->
+                      <pattern>com.fasterxml.jackson</pattern>
+                      <shadedPattern>${shading.prefix}.com.fasterxml.jackson</shadedPattern>
                     </relocation>
                   </relocations>
                   <transformers>
@@ -87,6 +90,7 @@
                       <include>com.squareup.okio:*</include>
                       <include>com.squareup.okhttp3:*</include>
                       <include>com.huawei.storage:esdk-obs-java</include>
+                      <include>com.fasterxml.jackson.core:*</include>
                       <include>org.apache.hadoop:hadoop-huaweicloud</include>
                     </includes>
                   </artifactSet>
@@ -98,6 +102,7 @@
                         <exclude>META-INF/*.SF</exclude>
                         <exclude>META-INF/*.DSA</exclude>
                         <exclude>META-INF/*.RSA</exclude>
+                        <exclude>log4j2.xml</exclude>
                       </excludes>
                     </filter>
                   </filters>
@@ -108,192 +113,10 @@
         </plugins>
       </build>
     </profile>
-    <profile>
-      <id>tests-off</id>
-      <activation>
-        <file>
-          <missing>src/test/resources/auth-keys.xml</missing>
-        </file>
-      </activation>
-      <properties>
-        <skipITs>true</skipITs>
-      </properties>
-    </profile>
-    <profile>
-      <id>tests-on</id>
-      <activation>
-        <file>
-          <exists>src/test/resources/auth-keys.xml</exists>
-        </file>
-      </activation>
-      <properties>
-        <skipITs>false</skipITs>
-      </properties>
-    </profile>
-    <profile>
-      <id>parallel-tests</id>
-      <activation>
-        <property>
-          <name>parallel-tests</name>
-        </property>
-      </activation>
-      <build>
-        <plugins>
-          <!--  添加编译插件 -->
-          <plugin>
-            <groupId>org.apache.maven.plugins</groupId>
-            <artifactId>maven-compiler-plugin</artifactId>
-            <version>3.5.1</version>
-            <configuration>
-              <source>1.8</source>
-              <target>1.8</target>
-              <encoding>UTF-8</encoding>
-            </configuration>
-          </plugin>
-          <plugin>
-            <artifactId>maven-antrun-plugin</artifactId>
-            <executions>
-              <execution>
-                <id>create-parallel-tests-dirs</id>
-                <phase>test-compile</phase>
-                <configuration>
-                  <target>
-                    <script language="javascript"><![CDATA[
-                      var baseDirs = [
-                          "${test.build.data}",
-                          "${test.build.dir}",
-                          "${hadoop.tmp.dir}" ];
-                      for (var i in baseDirs) {
-                        for (var j = 1; j <= ${testsThreadCount}; ++j) {
-                          var mkdir = project.createTask("mkdir");
-                          mkdir.setDir(new java.io.File(baseDirs[i], j));
-                          mkdir.perform();
-                        }
-                      }
-                    ]]></script>
-                  </target>
-                </configuration>
-                <goals>
-                  <goal>run</goal>
-                </goals>
-              </execution>
-            </executions>
-          </plugin>
-          <plugin>
-            <groupId>org.apache.maven.plugins</groupId>
-            <artifactId>maven-surefire-plugin</artifactId>
-            <configuration>
-              <!--<forkCount>${testsThreadCount}</forkCount>-->
-              <!--<reuseForks>false</reuseForks>-->
-              <argLine>${maven-surefire-plugin.argLine} -DminiClusterDedicatedDirs=true</argLine>
-              <systemPropertyVariables>
-                <test.build.data>${test.build.data}/${surefire.forkNumber}</test.build.data>
-                <test.build.dir>${test.build.dir}/${surefire.forkNumber}</test.build.dir>
-                <hadoop.tmp.dir>${hadoop.tmp.dir}/${surefire.forkNumber}</hadoop.tmp.dir>
-
-                <!-- Due to a Maven quirk, setting this to just -->
-                <!-- surefire.forkNumber won't do the parameter -->
-                <!-- substitution.  Putting a prefix in front of it like -->
-                <!-- "fork-" makes it work. -->
-                <test.unique.fork.id>fork-${surefire.forkNumber}</test.unique.fork.id>
-                </systemPropertyVariables>
-            </configuration>
-          </plugin>
-          <plugin>
-            <groupId>org.apache.maven.plugins</groupId>
-            <artifactId>maven-failsafe-plugin</artifactId>
-            <executions>
-              <execution>
-                <id>default-integration-test</id>
-                <goals>
-                  <goal>integration-test</goal>
-                  <goal>verify</goal>
-                </goals>
-                <configuration>
-                  <forkCount>${testsThreadCount}</forkCount>
-                  <reuseForks>false</reuseForks>
-                  <argLine>${maven-surefire-plugin.argLine} -DminiClusterDedicatedDirs=true</argLine>
-                  <systemPropertyVariables>
-                  </systemPropertyVariables>
-                  <!-- Some tests cannot run in parallel.  Tests that cover -->
-                  <!-- access to the root directory must run in isolation -->
-                  <!-- from anything else that could modify the bucket. -->
-                  <!-- isolation, because the file system is configured to -->
-                  <!-- purge existing multi-part upload data on -->
-                  <!-- initialization.  MiniYARNCluster has not yet been -->
-                  <!-- changed to handle parallel test execution gracefully. -->
-                  <!-- Exclude all of these tests from parallel execution, -->
-                  <!-- and instead run them sequentially in a separate -->
-                  <!-- Surefire execution step later. -->
-                  <includes>
-                    <include>**/ITest*.java</include>
-                  </includes>
-                  <excludes></excludes>
-                </configuration>
-              </execution>
-              <execution>
-                <id>sequential-integration-tests</id>
-                <goals>
-                  <goal>integration-test</goal>
-                  <goal>verify</goal>
-                </goals>
-                <configuration>
-                  <systemPropertyVariables>
-                    <!-- Tell tests that they are being executed sequentially -->
-                    <test.parallel.execution>false</test.parallel.execution>
-                  </systemPropertyVariables>
-                  <!-- Do a sequential run for tests that cannot handle -->
-                  <!-- parallel execution. -->
-                  <includes>
-                  </includes>
-                </configuration>
-              </execution>
-            </executions>
-          </plugin>
-        </plugins>
-      </build>
-    </profile>
-    <profile>
-      <id>sequential-tests</id>
-      <activation>
-        <property>
-          <name>!parallel-tests</name>
-        </property>
-      </activation>
-      <build>
-        <plugins>
-          <plugin>
-            <groupId>org.apache.maven.plugins</groupId>
-            <artifactId>maven-failsafe-plugin</artifactId>
-            <executions>
-              <execution>
-                <goals>
-                  <goal>integration-test</goal>
-                  <goal>verify</goal>
-                </goals>
-                <configuration>
-                  <systemPropertyVariables></systemPropertyVariables>
-                </configuration>
-              </execution>
-            </executions>
-          </plugin>
-        </plugins>
-      </build>
-    </profile>
-
-    <!-- Turn on scale tests-->
-    <profile>
-      <id>scale</id>
-      <activation>
-        <property>
-          <name>scale</name>
-        </property>
-      </activation>
-      <properties ></properties>
-    </profile>
   </profiles>
 
   <build>
+    <finalName>hadoop-huaweicloud-${hadoop.plat.version}-hw-${obsa.version}</finalName>
     <plugins>
       <plugin>
         <groupId>org.codehaus.mojo</groupId>
@@ -372,6 +195,66 @@
       		<groupId>jdk.tools</groupId>
       		<artifactId>jdk.tools</artifactId>
       	</exclusion>
+        <exclusion>
+          <artifactId>commons-beanutils</artifactId>
+          <groupId>commons-beanutils</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>commons-beanutils-core</artifactId>
+          <groupId>commons-beanutils</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>jackson-core-asl</artifactId>
+          <groupId>org.codehaus.jackson</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>jackson-mapper-asl</artifactId>
+          <groupId>org.codehaus.jackson</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>jetty-util</artifactId>
+          <groupId>org.mortbay.jetty</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>netty</artifactId>
+          <groupId>io.netty</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>nimbus-jose-jwt</artifactId>
+          <groupId>com.nimbusds</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>protobuf-java</artifactId>
+          <groupId>com.google.protobuf</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>zookeeper</artifactId>
+          <groupId>org.apache.zookeeper</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>jackson-databind</artifactId>
+          <groupId>com.fasterxml.jackson.core</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>jetty-server</artifactId>
+          <groupId>org.eclipse.jetty</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>jetty-servlet</artifactId>
+          <groupId>org.eclipse.jetty</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>jetty-util</artifactId>
+          <groupId>org.eclipse.jetty</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>jetty-util-ajax</artifactId>
+          <groupId>org.eclipse.jetty</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>jetty-webapp</artifactId>
+          <groupId>org.eclipse.jetty</groupId>
+        </exclusion>
       </exclusions>
     </dependency>
     <dependency>
@@ -379,6 +262,68 @@
       <artifactId>hadoop-common</artifactId>
       <version>${hadoop.version}</version>
       <scope>test</scope>
+      <exclusions>
+        <exclusion>
+          <artifactId>commons-beanutils</artifactId>
+          <groupId>commons-beanutils</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>commons-beanutils-core</artifactId>
+          <groupId>commons-beanutils</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>jackson-core-asl</artifactId>
+          <groupId>org.codehaus.jackson</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>jackson-mapper-asl</artifactId>
+          <groupId>org.codehaus.jackson</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>jetty-util</artifactId>
+          <groupId>org.mortbay.jetty</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>netty</artifactId>
+          <groupId>io.netty</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>nimbus-jose-jwt</artifactId>
+          <groupId>com.nimbusds</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>protobuf-java</artifactId>
+          <groupId>com.google.protobuf</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>zookeeper</artifactId>
+          <groupId>org.apache.zookeeper</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>jackson-databind</artifactId>
+          <groupId>com.fasterxml.jackson.core</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>jetty-server</artifactId>
+          <groupId>org.eclipse.jetty</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>jetty-servlet</artifactId>
+          <groupId>org.eclipse.jetty</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>jetty-util</artifactId>
+          <groupId>org.eclipse.jetty</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>jetty-util-ajax</artifactId>
+          <groupId>org.eclipse.jetty</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>jetty-webapp</artifactId>
+          <groupId>org.eclipse.jetty</groupId>
+        </exclusion>
+      </exclusions>
       <type>test-jar</type>
     </dependency>
     <dependency>
@@ -398,12 +343,60 @@
       <artifactId>hadoop-mapreduce-client-jobclient</artifactId>
       <version>${hadoop.version}</version>
       <scope>test</scope>
+      <exclusions>
+        <exclusion>
+          <artifactId>netty</artifactId>
+          <groupId>io.netty</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>protobuf-java</artifactId>
+          <groupId>com.google.protobuf</groupId>
+        </exclusion>
+      </exclusions>
     </dependency>
     <dependency>
       <groupId>org.apache.hadoop</groupId>
       <artifactId>hadoop-yarn-server-tests</artifactId>
       <version>${hadoop.version}</version>
       <scope>test</scope>
+      <exclusions>
+        <exclusion>
+          <artifactId>jackson-core-asl</artifactId>
+          <groupId>org.codehaus.jackson</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>jackson-mapper-asl</artifactId>
+          <groupId>org.codehaus.jackson</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>jetty-util</artifactId>
+          <groupId>org.mortbay.jetty</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>netty</artifactId>
+          <groupId>io.netty</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>protobuf-java</artifactId>
+          <groupId>com.google.protobuf</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>zookeeper</artifactId>
+          <groupId>org.apache.zookeeper</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>jetty-util</artifactId>
+          <groupId>org.eclipse.jetty</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>jetty-server</artifactId>
+          <groupId>org.eclipse.jetty</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>jetty-util-ajax</artifactId>
+          <groupId>org.eclipse.jetty</groupId>
+        </exclusion>
+      </exclusions>
       <type>test-jar</type>
     </dependency>
     <dependency>
@@ -412,19 +405,6 @@
       <version>${hadoop.version}</version>
       <scope>test</scope>
       <type>jar</type>
-    </dependency>
-    <dependency>
-      <groupId>org.apache.hadoop</groupId>
-      <artifactId>hadoop-distcp</artifactId>
-      <version>${hadoop.version}</version>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.apache.hadoop</groupId>
-      <artifactId>hadoop-distcp</artifactId>
-      <version>${hadoop.version}</version>
-      <scope>test</scope>
-      <type>test-jar</type>
     </dependency>
     <dependency>
       <groupId>com.huawei.storage</groupId>

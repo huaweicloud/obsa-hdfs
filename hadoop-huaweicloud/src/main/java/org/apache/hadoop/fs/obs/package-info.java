@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,25 +16,14 @@
  * limitations under the License.
  */
 
-package org.apache.hadoop.fs.obs;
-
-import static org.mockito.Mockito.*;
-
-import java.net.URI;
-
-import com.obs.services.ObsClient;
-
 /**
- * An {@link OBSClientFactory} that returns Mockito mocks of the
- * interface suitable for unit testing.
+ * Package for supporting
+ * <a href="https://www.huaweicloud.com/en-us/product/obs.html">HuaweiCloud
+ * Object Storage Service (OBS)</a> as a backend filesystem in Hadoop.
+ * <p>
+ * OBS supports two kinds of buckets: object bucket and posix bucket. Posix
+ * bucket provides more POSIX-like semantics than object bucket, and is
+ * recommended for Hadoop. Object bucket is deprecated for Hadoop.
  */
-public class MockOBSClientFactory implements ObsClientFactory {
 
-  @Override
-  public ObsClient createObsClient(URI name) {
-    String bucket = name.getHost();
-    ObsClient obsClient = mock(ObsClient.class);
-    when(obsClient.headBucket(bucket)).thenReturn(true);
-    return obsClient;
-  }
-}
+package org.apache.hadoop.fs.obs;
