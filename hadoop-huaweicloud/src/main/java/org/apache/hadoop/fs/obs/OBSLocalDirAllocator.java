@@ -55,8 +55,7 @@ public class OBSLocalDirAllocator {
     //A Map from the config item names like "mapred.local.dir"
     //to the instance of the AllocatorPerContext. This
     //is a static object to make sure there exists exactly one instance per JVM
-    private static Map<String, OBSAllocatorPerContext> contexts =
-        new TreeMap<String, OBSAllocatorPerContext>();
+    private static Map<String, OBSAllocatorPerContext> contexts = new TreeMap<String, OBSAllocatorPerContext>();
 
     private String contextCfgItemName;
 
@@ -103,8 +102,7 @@ public class OBSLocalDirAllocator {
      * @return the complete path to the file on a local disk
      * @throws IOException
      */
-    public Path getLocalPathForWrite(String pathStr,
-        Configuration conf) throws IOException {
+    public Path getLocalPathForWrite(String pathStr, Configuration conf) throws IOException {
         return getLocalPathForWrite(pathStr, SIZE_UNKNOWN, conf);
     }
 
@@ -121,8 +119,7 @@ public class OBSLocalDirAllocator {
      * @return the complete path to the file on a local disk
      * @throws IOException
      */
-    public Path getLocalPathForWrite(String pathStr, long size,
-        Configuration conf) throws IOException {
+    public Path getLocalPathForWrite(String pathStr, long size, Configuration conf) throws IOException {
         return getLocalPathForWrite(pathStr, size, conf, true);
     }
 
@@ -140,9 +137,8 @@ public class OBSLocalDirAllocator {
      * @return the complete path to the file on a local disk
      * @throws IOException
      */
-    public Path getLocalPathForWrite(String pathStr, long size,
-        Configuration conf,
-        boolean checkWrite) throws IOException {
+    public Path getLocalPathForWrite(String pathStr, long size, Configuration conf, boolean checkWrite)
+        throws IOException {
         OBSAllocatorPerContext context = obtainContext(contextCfgItemName);
         return context.getLocalPathForWrite(pathStr, size, conf, checkWrite);
     }
@@ -157,8 +153,7 @@ public class OBSLocalDirAllocator {
      * @return the complete path to the file on a local disk
      * @throws IOException
      */
-    public Path getLocalPathToRead(String pathStr,
-        Configuration conf) throws IOException {
+    public Path getLocalPathToRead(String pathStr, Configuration conf) throws IOException {
         OBSAllocatorPerContext context = obtainContext(contextCfgItemName);
         return context.getLocalPathToRead(pathStr, conf);
     }
@@ -171,9 +166,7 @@ public class OBSLocalDirAllocator {
      * @return all of the paths that exist under any of the roots
      * @throws IOException
      */
-    public Iterable<Path> getAllLocalPathsToRead(String pathStr,
-        Configuration conf
-    ) throws IOException {
+    public Iterable<Path> getAllLocalPathsToRead(String pathStr, Configuration conf) throws IOException {
         OBSAllocatorPerContext context;
         synchronized (this) {
             context = obtainContext(contextCfgItemName);
@@ -194,8 +187,7 @@ public class OBSLocalDirAllocator {
      * @return a unique temporary file
      * @throws IOException
      */
-    public File createTmpFileForWrite(String pathStr, long size,
-        Configuration conf) throws IOException {
+    public File createTmpFileForWrite(String pathStr, long size, Configuration conf) throws IOException {
         OBSAllocatorPerContext context = obtainContext(contextCfgItemName);
         return context.createTmpFileForWrite(pathStr, size, conf);
     }
@@ -299,8 +291,7 @@ public class OBSLocalDirAllocator {
          * This method gets called everytime before any read/write to make sure
          * that any change to localDirs is reflected immediately.
          */
-        private Context confChanged(Configuration conf)
-            throws IOException {
+        private Context confChanged(Configuration conf) throws IOException {
             Context ctx = currentContext.get();
             String newLocalDirs = conf.get(contextCfgItemName);
             if (null == newLocalDirs) {
@@ -340,8 +331,7 @@ public class OBSLocalDirAllocator {
                         log.warn("Failed to create " + dirStrings[i]);
                     }
                 } catch (IOException ie) {
-                    log.warn("Failed to create " + dirStrings[i] + ": "
-                        + ie.getMessage() + "\n", ie);
+                    log.warn("Failed to create " + dirStrings[i] + ": " + ie.getMessage() + "\n", ie);
                 } //ignore
             }
             ctx.localDirs = dirs.toArray(new Path[dirs.size()]);
@@ -358,8 +348,7 @@ public class OBSLocalDirAllocator {
             return ctx;
         }
 
-        private Path createPath(Path dir, String path,
-            boolean checkWrite) throws IOException {
+        private Path createPath(Path dir, String path, boolean checkWrite) throws IOException {
             Path file = new Path(dir, path);
             if (checkWrite) {
                 //check whether we are able to create a directory here. If the disk
@@ -392,8 +381,8 @@ public class OBSLocalDirAllocator {
          * If size is not known, use roulette selection -- pick directories
          * with probability proportional to their available space.
          */
-        public Path getLocalPathForWrite(String pathStr, long size,
-            Configuration conf, boolean checkWrite) throws IOException {
+        public Path getLocalPathForWrite(String pathStr, long size, Configuration conf, boolean checkWrite)
+            throws IOException {
             Context ctx = confChanged(conf);
             int numDirs = ctx.localDirs.length;
             int numDirsSearched = 0;
@@ -442,8 +431,7 @@ public class OBSLocalDirAllocator {
                 while (numDirsSearched < numDirs) {
                     long capacity = ctx.dirDF[dirNum].getAvailable();
                     if (capacity > size) {
-                        returnPath =
-                            createPath(ctx.localDirs[dirNum], pathStr, checkWrite);
+                        returnPath = createPath(ctx.localDirs[dirNum], pathStr, checkWrite);
                         if (returnPath != null) {
                             ctx.getAndIncrDirNumLastAccessed(numDirsSearched);
                             break;
@@ -459,8 +447,7 @@ public class OBSLocalDirAllocator {
             }
 
             //no path found
-            throw new DiskErrorException("Could not find any valid local "
-                + "directory for " + pathStr);
+            throw new DiskErrorException("Could not find any valid local " + "directory for " + pathStr);
         }
 
         /**
@@ -470,8 +457,7 @@ public class OBSLocalDirAllocator {
          * a file on the first path which has enough space. The file is guaranteed
          * to go away when the JVM exits.
          */
-        public File createTmpFileForWrite(String pathStr, long size,
-            Configuration conf) throws IOException {
+        public File createTmpFileForWrite(String pathStr, long size, Configuration conf) throws IOException {
 
             // find an appropriate directory
             Path path = getLocalPathForWrite(pathStr, size, conf, true);
@@ -489,8 +475,7 @@ public class OBSLocalDirAllocator {
          * configured dirs for the file's existence and return the complete
          * path to the file when we find one
          */
-        public Path getLocalPathToRead(String pathStr,
-            Configuration conf) throws IOException {
+        public Path getLocalPathToRead(String pathStr, Configuration conf) throws IOException {
             Context ctx = confChanged(conf);
             int numDirs = ctx.localDirs.length;
             int numDirsSearched = 0;
@@ -508,8 +493,8 @@ public class OBSLocalDirAllocator {
             }
 
             //no path found
-            throw new DiskErrorException("Could not find " + pathStr + " in any of"
-                + " the configured local directories");
+            throw new DiskErrorException(
+                "Could not find " + pathStr + " in any of" + " the configured local directories");
         }
 
         private static class PathIterator implements Iterator<Path>, Iterable<Path> {
@@ -523,8 +508,7 @@ public class OBSLocalDirAllocator {
 
             private Path next = null;
 
-            private PathIterator(FileSystem fs, String pathStr, Path[] rootDirs)
-                throws IOException {
+            private PathIterator(FileSystem fs, String pathStr, Path[] rootDirs) throws IOException {
                 this.fs = fs;
                 this.pathStr = pathStr;
                 this.rootDirs = rootDirs;
@@ -579,8 +563,7 @@ public class OBSLocalDirAllocator {
          * @return all of the paths that exist under any of the roots
          * @throws IOException
          */
-        Iterable<Path> getAllLocalPathsToRead(String pathStr,
-            Configuration conf) throws IOException {
+        Iterable<Path> getAllLocalPathsToRead(String pathStr, Configuration conf) throws IOException {
             Context ctx = confChanged(conf);
             if (pathStr.startsWith("/")) {
                 pathStr = pathStr.substring(1);

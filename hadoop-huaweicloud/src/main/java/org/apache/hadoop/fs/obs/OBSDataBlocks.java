@@ -50,8 +50,7 @@ final class OBSDataBlocks {
     /**
      * Class logger.
      */
-    private static final Logger LOG = LoggerFactory.getLogger(
-        OBSDataBlocks.class);
+    private static final Logger LOG = LoggerFactory.getLogger(OBSDataBlocks.class);
 
     private OBSDataBlocks() {
     }
@@ -66,13 +65,10 @@ final class OBSDataBlocks {
      * @throws NullPointerException      for a null buffer
      * @throws IndexOutOfBoundsException if indices are out of range
      */
-    static void validateWriteArgs(final byte[] b, final int off,
-        final int len) {
+    static void validateWriteArgs(final byte[] b, final int off, final int len) {
         Preconditions.checkNotNull(b);
-        if (off < 0 || off > b.length || len < 0 || off + len > b.length
-            || off + len < 0) {
-            throw new IndexOutOfBoundsException(
-                "write (b[" + b.length + "], " + off + ", " + len + ')');
+        if (off < 0 || off > b.length || len < 0 || off + len > b.length || off + len < 0) {
+            throw new IndexOutOfBoundsException("write (b[" + b.length + "], " + off + ", " + len + ')');
         }
     }
 
@@ -84,8 +80,7 @@ final class OBSDataBlocks {
      * @return the factory, ready to be initialized.
      * @throws IllegalArgumentException if the name is unknown.
      */
-    static BlockFactory createFactory(final OBSFileSystem owner,
-        final String name) {
+    static BlockFactory createFactory(final OBSFileSystem owner, final String name) {
         switch (name) {
             case OBSConstants.FAST_UPLOAD_BUFFER_ARRAY:
                 return new ByteArrayBlockFactory(owner);
@@ -94,8 +89,7 @@ final class OBSDataBlocks {
             case OBSConstants.FAST_UPLOAD_BYTEBUFFER:
                 return new ByteBufferBlockFactory(owner);
             default:
-                throw new IllegalArgumentException(
-                    "Unsupported block buffer" + " \"" + name + '"');
+                throw new IllegalArgumentException("Unsupported block buffer" + " \"" + name + '"');
         }
     }
 
@@ -159,8 +153,7 @@ final class OBSDataBlocks {
          * @throws IllegalStateException if the current state is not as
          *                               expected
          */
-        protected final synchronized void enterState(final DestState current,
-            final DestState next)
+        protected final synchronized void enterState(final DestState current, final DestState next)
             throws IllegalStateException {
             verifyState(current);
             LOG.debug("{}: entering state {}", this, next);
@@ -173,12 +166,10 @@ final class OBSDataBlocks {
          * @param expected expected state.
          * @throws IllegalStateException if the DataBlock is in the wrong state
          */
-        protected final void verifyState(final DestState expected)
-            throws IllegalStateException {
+        protected final void verifyState(final DestState expected) throws IllegalStateException {
             if (expected != null && state != expected) {
                 throw new IllegalStateException(
-                    "Expected stream state " + expected
-                        + " -but actual state is " + state + " in " + this);
+                    "Expected stream state " + expected + " -but actual state is " + state + " in " + this);
             }
         }
 
@@ -238,14 +229,12 @@ final class OBSDataBlocks {
          * @return number of bytes written
          * @throws IOException trouble
          */
-        int write(final byte[] buffer, final int offset, final int length)
-            throws IOException {
+        int write(final byte[] buffer, final int offset, final int length) throws IOException {
             verifyState(DestState.Writing);
             Preconditions.checkArgument(buffer != null, "Null buffer");
             Preconditions.checkArgument(length >= 0, "length is negative");
             Preconditions.checkArgument(offset >= 0, "offset is negative");
-            Preconditions.checkArgument(
-                !(buffer.length - offset < length),
+            Preconditions.checkArgument(!(buffer.length - offset < length),
                 "buffer shorter than amount of data to write");
             return 0;
         }
@@ -335,8 +324,7 @@ final class OBSDataBlocks {
         DataBlock create(final long index, final int limit) {
             int firstBlockSize = super.owner.getConf()
                 .getInt(OBSConstants.FAST_UPLOAD_BUFFER_ARRAY_FIRST_BLOCK_SIZE,
-                    OBSConstants
-                        .FAST_UPLOAD_BUFFER_ARRAY_FIRST_BLOCK_SIZE_DEFAULT);
+                    OBSConstants.FAST_UPLOAD_BUFFER_ARRAY_FIRST_BLOCK_SIZE_DEFAULT);
             return new ByteArrayBlock(0, limit, firstBlockSize);
         }
     }
@@ -355,8 +343,7 @@ final class OBSDataBlocks {
          * @return input stream
          */
         ByteArrayInputStream getInputStream() {
-            ByteArrayInputStream bin = new ByteArrayInputStream(this.buf, 0,
-                count);
+            ByteArrayInputStream bin = new ByteArrayInputStream(this.buf, 0, count);
             this.reset();
             this.buf = null;
             return bin;
@@ -399,8 +386,7 @@ final class OBSDataBlocks {
          */
         private ByteArrayInputStream inputStream = null;
 
-        ByteArrayBlock(final long index, final int limitBlockSize,
-            final int blockSize) {
+        ByteArrayBlock(final long index, final int limitBlockSize, final int blockSize) {
             super(index);
             this.limit = limitBlockSize;
             this.buffer = new OBSByteArrayOutputStream(blockSize);
@@ -446,8 +432,7 @@ final class OBSDataBlocks {
         }
 
         @Override
-        int write(final byte[] b, final int offset, final int len)
-            throws IOException {
+        int write(final byte[] b, final int offset, final int len) throws IOException {
             super.write(b, offset, len);
             int written = Math.min(remainingCapacity(), len);
             buffer.write(b, offset, written);
@@ -469,16 +454,8 @@ final class OBSDataBlocks {
 
         @Override
         public String toString() {
-            return "ByteArrayBlock{"
-                + "index="
-                + getIndex()
-                + ", state="
-                + getState()
-                + ", limit="
-                + limit
-                + ", dataSize="
-                + dataSize
-                + '}';
+            return "ByteArrayBlock{" + "index=" + getIndex() + ", state=" + getState() + ", limit=" + limit
+                + ", dataSize=" + dataSize + '}';
         }
     }
 
@@ -491,14 +468,12 @@ final class OBSDataBlocks {
         /**
          * The directory buffer pool.
          */
-        private static final DirectBufferPool BUFFER_POOL
-            = new DirectBufferPool();
+        private static final DirectBufferPool BUFFER_POOL = new DirectBufferPool();
 
         /**
          * Count of outstanding buffers.
          */
-        private static final AtomicInteger BUFFERS_OUTSTANDING
-            = new AtomicInteger(0);
+        private static final AtomicInteger BUFFERS_OUTSTANDING = new AtomicInteger(0);
 
         ByteBufferBlockFactory(final OBSFileSystem owner) {
             super(owner);
@@ -532,8 +507,7 @@ final class OBSDataBlocks {
 
         @Override
         public String toString() {
-            return "ByteBufferBlockFactory{" + "buffersOutstanding="
-                + BUFFERS_OUTSTANDING + '}';
+            return "ByteBufferBlockFactory{" + "buffersOutstanding=" + BUFFERS_OUTSTANDING + '}';
         }
     }
 
@@ -610,8 +584,7 @@ final class OBSDataBlocks {
         }
 
         @Override
-        int write(final byte[] b, final int offset, final int len)
-            throws IOException {
+        int write(final byte[] b, final int offset, final int len) throws IOException {
             super.write(b, offset, len);
             int written = Math.min(remainingCapacity(), len);
             blockBuffer.put(b, offset, written);
@@ -635,18 +608,8 @@ final class OBSDataBlocks {
 
         @Override
         public String toString() {
-            return "ByteBufferBlock{"
-                + "index="
-                + getIndex()
-                + ", state="
-                + getState()
-                + ", dataSize="
-                + dataSize()
-                + ", limit="
-                + bufferSize
-                + ", remainingCapacity="
-                + remainingCapacity()
-                + '}';
+            return "ByteBufferBlock{" + "index=" + getIndex() + ", state=" + getState() + ", dataSize=" + dataSize()
+                + ", limit=" + bufferSize + ", remainingCapacity=" + remainingCapacity() + '}';
         }
 
         /**
@@ -666,10 +629,8 @@ final class OBSDataBlocks {
              */
             private ByteBuffer byteBuffer;
 
-            ByteBufferInputStream(final int streamSize,
-                final ByteBuffer streamByteBuffer) {
-                LOG.debug("Creating ByteBufferInputStream of size {}",
-                    streamSize);
+            ByteBufferInputStream(final int streamSize, final ByteBuffer streamByteBuffer) {
+                LOG.debug("Creating ByteBufferInputStream of size {}", streamSize);
                 this.size = streamSize;
                 this.byteBuffer = streamByteBuffer;
             }
@@ -681,8 +642,7 @@ final class OBSDataBlocks {
              */
             @Override
             public synchronized void close() {
-                LOG.debug("ByteBufferInputStream.close() for {}",
-                    ByteBufferBlock.super.toString());
+                LOG.debug("ByteBufferInputStream.close() for {}", ByteBufferBlock.super.toString());
                 byteBuffer = null;
             }
 
@@ -706,16 +666,14 @@ final class OBSDataBlocks {
             }
 
             @Override
-            public synchronized long skip(final long offset)
-                throws IOException {
+            public synchronized long skip(final long offset) throws IOException {
                 verifyOpen();
                 long newPos = position() + offset;
                 if (newPos < 0) {
                     throw new EOFException(FSExceptionMessages.NEGATIVE_SEEK);
                 }
                 if (newPos > size) {
-                    throw new EOFException(
-                        FSExceptionMessages.CANNOT_SEEK_PAST_EOF);
+                    throw new EOFException(FSExceptionMessages.CANNOT_SEEK_PAST_EOF);
                 }
                 byteBuffer.position((int) newPos);
                 return newPos;
@@ -723,8 +681,7 @@ final class OBSDataBlocks {
 
             @Override
             public synchronized int available() {
-                Preconditions.checkState(byteBuffer != null,
-                    FSExceptionMessages.STREAM_IS_CLOSED);
+                Preconditions.checkState(byteBuffer != null, FSExceptionMessages.STREAM_IS_CLOSED);
                 return byteBuffer.remaining();
             }
 
@@ -775,20 +732,13 @@ final class OBSDataBlocks {
              *                                   amount of data requested.
              * @throws IllegalArgumentException  other arguments are invalid.
              */
-            public synchronized int read(final byte[] b, final int offset,
-                final int length)
-                throws IOException {
+            public synchronized int read(final byte[] b, final int offset, final int length) throws IOException {
                 Preconditions.checkArgument(length >= 0, "length is negative");
                 Preconditions.checkArgument(b != null, "Null buffer");
                 if (b.length - offset < length) {
                     throw new IndexOutOfBoundsException(
-                        FSExceptionMessages.TOO_MANY_BYTES_FOR_DEST_BUFFER
-                            + ": request length ="
-                            + length
-                            + ", with offset ="
-                            + offset
-                            + "; buffer capacity ="
-                            + (b.length - offset));
+                        FSExceptionMessages.TOO_MANY_BYTES_FOR_DEST_BUFFER + ": request length =" + length
+                            + ", with offset =" + offset + "; buffer capacity =" + (b.length - offset));
                 }
                 verifyOpen();
                 if (!hasRemaining()) {
@@ -802,8 +752,7 @@ final class OBSDataBlocks {
 
             @Override
             public String toString() {
-                final StringBuilder sb = new StringBuilder(
-                    "ByteBufferInputStream{");
+                final StringBuilder sb = new StringBuilder("ByteBufferInputStream{");
                 sb.append("size=").append(size);
                 ByteBuffer buf = this.byteBuffer;
                 if (buf != null) {
@@ -839,9 +788,7 @@ final class OBSDataBlocks {
          */
         @Override
         DataBlock create(final long index, final int limit) throws IOException {
-            File destFile = createTmpFileForWrite(
-                String.format("obs-block-%04d-", index), limit,
-                getOwner().getConf());
+            File destFile = createTmpFileForWrite(String.format("obs-block-%04d-", index), limit, getOwner().getConf());
             return new DiskBlock(destFile, limit, index);
         }
 
@@ -856,8 +803,7 @@ final class OBSDataBlocks {
          * @return a unique temporary file
          * @throws IOException IO problems
          */
-        static synchronized File createTmpFileForWrite(final String pathStr,
-            final long size, final Configuration conf)
+        static File createTmpFileForWrite(final String pathStr, final long size, final Configuration conf)
             throws IOException {
             if (directoryAllocator == null) {
                 String bufferDir = conf.get(OBSConstants.BUFFER_DIR) != null
@@ -865,8 +811,7 @@ final class OBSDataBlocks {
                     : "hadoop.tmp.dir";
                 directoryAllocator = new OBSLocalDirAllocator(bufferDir);
             }
-            return directoryAllocator.createTmpFileForWrite(pathStr, size,
-                conf);
+            return directoryAllocator.createTmpFileForWrite(pathStr, size, conf);
         }
     }
 
@@ -901,14 +846,11 @@ final class OBSDataBlocks {
          */
         private BufferedOutputStream out;
 
-        DiskBlock(final File destBufferFile, final int limitSize,
-            final long index)
-            throws FileNotFoundException {
+        DiskBlock(final File destBufferFile, final int limitSize, final long index) throws FileNotFoundException {
             super(index);
             this.limit = limitSize;
             this.bufferFile = destBufferFile;
-            out = new BufferedOutputStream(
-                new FileOutputStream(destBufferFile));
+            out = new BufferedOutputStream(new FileOutputStream(destBufferFile));
         }
 
         @Override
@@ -927,8 +869,7 @@ final class OBSDataBlocks {
         }
 
         @Override
-        int write(final byte[] b, final int offset, final int len)
-            throws IOException {
+        int write(final byte[] b, final int offset, final int len) throws IOException {
             super.write(b, offset, len);
             int written = Math.min(remainingCapacity(), len);
             out.write(b, offset, written);
@@ -960,18 +901,13 @@ final class OBSDataBlocks {
                 case Writing:
                     if (bufferFile.exists()) {
                         // file was not uploaded
-                        LOG.debug(
-                            "Block[{}]: Deleting buffer file as upload "
-                                + "did not start",
-                            getIndex());
+                        LOG.debug("Block[{}]: Deleting buffer file as upload " + "did not start", getIndex());
                         closeBlock();
                     }
                     break;
 
                 case Upload:
-                    LOG.debug(
-                        "Block[{}]: Buffer file {} exists —close upload stream",
-                        getIndex(), bufferFile);
+                    LOG.debug("Block[{}]: Buffer file {} exists —close upload stream", getIndex(), bufferFile);
                     break;
 
                 case Closed:
@@ -997,9 +933,8 @@ final class OBSDataBlocks {
 
         @Override
         public String toString() {
-            return "FileBlock{index=" + getIndex() + ", destFile=" + bufferFile
-                + ", state=" + getState() + ", dataSize="
-                + dataSize() + ", limit=" + limit + '}';
+            return "FileBlock{index=" + getIndex() + ", destFile=" + bufferFile + ", state=" + getState()
+                + ", dataSize=" + dataSize() + ", limit=" + limit + '}';
         }
 
         /**
@@ -1010,12 +945,10 @@ final class OBSDataBlocks {
             LOG.debug("block[{}]: closeBlock()", getIndex());
             if (!closed.getAndSet(true)) {
                 if (!bufferFile.delete() && bufferFile.exists()) {
-                    LOG.warn("delete({}) returned false",
-                        bufferFile.getAbsoluteFile());
+                    LOG.warn("delete({}) returned false", bufferFile.getAbsoluteFile());
                 }
             } else {
-                LOG.debug("block[{}]: skipping re-entrant closeBlock()",
-                    getIndex());
+                LOG.debug("block[{}]: skipping re-entrant closeBlock()", getIndex());
             }
         }
     }

@@ -31,8 +31,7 @@ class RenameFailedException extends PathIOException {
      */
     private boolean exitCode = false;
 
-    RenameFailedException(final Path src, final Path optionalDest,
-        final String error) {
+    RenameFailedException(final Path src, final Path optionalDest, final String error) {
         super(src.toString(), error);
         setOperation("rename");
         if (optionalDest != null) {

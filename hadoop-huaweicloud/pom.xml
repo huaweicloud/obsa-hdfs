@@ -16,24 +16,21 @@
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
-  <groupId>org.apache.hadoop</groupId>
+  <groupId>com.huaweicloud</groupId>
   <artifactId>hadoop-huaweicloud</artifactId>
-  <version>2.8.3-hw-42</version>
-  <name>Apache Hadoop OBS support</name>
+  <version>2.8.3-hw-45</version>
+  <name>hadoop-huaweicloud</name>
   <description>
     This module contains code to support integration with OBS.
-    It also declares the dependencies needed to work with OBS services.
   </description>
   <packaging>jar</packaging>
 
   <properties>
     <file.encoding>UTF-8</file.encoding>
-    <downloadSources>true</downloadSources>
-    <hadoop.tmp.dir>${project.build.directory}/test</hadoop.tmp.dir>
-    <hadoop.plat.version>2.8.3</hadoop.plat.version>
     <hadoop.version>2.8.3.0101-hw-ei-14</hadoop.version>
-    <obsa.version>42</obsa.version>
-    <esdk.version>3.20.6.1</esdk.version>
+    <esdk.version>3.21.4.1</esdk.version>
+    <hadoop.plat.version>2.8.3</hadoop.plat.version>
+    <obsa.version>45</obsa.version>
   </properties>
 
   <profiles>
@@ -42,8 +39,8 @@
       <properties>
         <hadoop.plat.version>2.8.3</hadoop.plat.version>
         <hadoop.version>2.8.3.0101-hw-ei-14</hadoop.version>
-        <obsa.version>42</obsa.version>
-        <esdk.version>3.20.6.1</esdk.version>
+        <obsa.version>45</obsa.version>
+        <esdk.version>3.21.4.1</esdk.version>
         <shading.prefix>obs.shaded</shading.prefix>
       </properties>
       <build>
@@ -51,6 +48,10 @@
           <plugin>
             <groupId>org.apache.maven.plugins</groupId>
             <artifactId>maven-shade-plugin</artifactId>
+            <version>3.2.1</version>
+            <configuration>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+            </configuration>
             <executions>
               <execution>
                 <id>shade-obs-fs</id>
@@ -89,13 +90,27 @@
                       <include>com.jamesmurty.utils:*</include>
                       <include>com.squareup.okio:*</include>
                       <include>com.squareup.okhttp3:*</include>
-                      <include>com.huawei.storage:esdk-obs-java</include>
+                      <include>com.huaweicloud:esdk-obs-java-optimised</include>
                       <include>com.fasterxml.jackson.core:*</include>
-                      <include>org.apache.hadoop:hadoop-huaweicloud</include>
                     </includes>
                   </artifactSet>
                   <filters>
                     <!-- Exclude signatures -->
+                    <filter>
+                      <artifact>com.squareup.okhttp3:*</artifact>
+                      <excludes>
+                        <exclude>okhttp3/internal/connection/ExchangeFinder.class</exclude>
+                        <exclude>okhttp3/internal/connection/Transmitter.class</exclude>
+                        <exclude>okhttp3/internal/http/RetryAndFollowUpInterceptor.class</exclude>
+                      </excludes>
+                    </filter>
+                    <filter>
+                      <artifact>com.squareup.okio:*</artifact>
+                      <excludes>
+                        <exclude>okio/AsyncTimeout.class</exclude>
+                        <exclude>okio/SegmentPool.class</exclude>
+                      </excludes>
+                    </filter>
                     <filter>
                       <artifact>*:*</artifact>
                       <excludes>
@@ -121,6 +136,7 @@
       <plugin>
         <groupId>org.codehaus.mojo</groupId>
         <artifactId>findbugs-maven-plugin</artifactId>
+        <version>3.0.0</version>
         <configuration>
           <findbugsXmlOutput>true</findbugsXmlOutput>
           <xmlOutput>true</xmlOutput>
@@ -132,6 +148,7 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-project-info-reports-plugin</artifactId>
+        <version>2.7</version>
         <configuration>
           <dependencyDetailsEnabled>false</dependencyDetailsEnabled>
         </configuration>
@@ -139,6 +156,7 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
+        <version>2.12.4</version>
         <configuration>
           <forkedProcessTimeoutInSeconds>3600</forkedProcessTimeoutInSeconds>
         </configuration>
@@ -147,18 +165,12 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-jar-plugin</artifactId>
-        <configuration>
-          <archive>
-            <manifest>
-              <addClasspath>true</addClasspath>
-              <classpathPrefix>lib/</classpathPrefix>
-            </manifest>
-          </archive>
-        </configuration>
+        <version>2.5</version>
       </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-dependency-plugin</artifactId>
+        <version>2.8</version>
         <executions>
           <execution>
             <id>copy</id>
@@ -175,12 +187,13 @@
         <plugin>
             <groupId>org.apache.maven.plugins</groupId>
             <artifactId>maven-compiler-plugin</artifactId>
+          <version>3.1</version>
             <configuration>
                 <source>8</source>
                 <target>8</target>
+                <compilerArgument>-Xlint:unchecked</compilerArgument>
             </configuration>
         </plugin>
-
     </plugins>
   </build>
 
@@ -189,7 +202,7 @@
       <groupId>org.apache.hadoop</groupId>
       <artifactId>hadoop-common</artifactId>
       <version>${hadoop.version}</version>
-      <scope>compile</scope>
+      <scope>provided</scope>
       <exclusions>
       	<exclusion>
       		<groupId>jdk.tools</groupId>
@@ -259,18 +272,32 @@
     </dependency>
     <dependency>
       <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-hdfs-client</artifactId>
+      <version>${hadoop.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.huaweicloud</groupId>
+      <artifactId>esdk-obs-java-optimised</artifactId>
+      <version>${esdk.version}</version>
+      <exclusions>
+        <exclusion>
+          <groupId>org.apache.logging.log4j</groupId>
+          <artifactId>log4j-api</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>org.apache.logging.log4j</groupId>
+          <artifactId>log4j-core</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
       <artifactId>hadoop-common</artifactId>
       <version>${hadoop.version}</version>
       <scope>test</scope>
       <exclusions>
-        <exclusion>
-          <artifactId>commons-beanutils</artifactId>
-          <groupId>commons-beanutils</groupId>
-        </exclusion>
-        <exclusion>
-          <artifactId>commons-beanutils-core</artifactId>
-          <groupId>commons-beanutils</groupId>
-        </exclusion>
         <exclusion>
           <artifactId>jackson-core-asl</artifactId>
           <groupId>org.codehaus.jackson</groupId>
@@ -308,19 +335,11 @@
           <groupId>org.eclipse.jetty</groupId>
         </exclusion>
         <exclusion>
-          <artifactId>jetty-servlet</artifactId>
-          <groupId>org.eclipse.jetty</groupId>
-        </exclusion>
-        <exclusion>
           <artifactId>jetty-util</artifactId>
           <groupId>org.eclipse.jetty</groupId>
         </exclusion>
         <exclusion>
           <artifactId>jetty-util-ajax</artifactId>
-          <groupId>org.eclipse.jetty</groupId>
-        </exclusion>
-        <exclusion>
-          <artifactId>jetty-webapp</artifactId>
           <groupId>org.eclipse.jetty</groupId>
         </exclusion>
       </exclusions>
@@ -407,11 +426,6 @@
       <type>jar</type>
     </dependency>
     <dependency>
-      <groupId>com.huawei.storage</groupId>
-      <artifactId>esdk-obs-java</artifactId>
-      <version>${esdk.version}</version>
-    </dependency>
-    <dependency>
       <groupId>org.powermock</groupId>
       <artifactId>powermock-api-mockito</artifactId>
       <version>1.7.4</version>
@@ -421,6 +435,12 @@
       <groupId>org.powermock</groupId>
       <artifactId>powermock-module-junit4</artifactId>
       <version>1.7.4</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-minicluster</artifactId>
+      <version>${hadoop.version}</version>
       <scope>test</scope>
     </dependency>
   </dependencies>

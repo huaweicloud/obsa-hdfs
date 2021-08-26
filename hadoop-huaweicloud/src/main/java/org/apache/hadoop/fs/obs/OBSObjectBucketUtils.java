@@ -45,13 +45,11 @@ import java.util.concurrent.Future;
 /**
  * Object bucket specific utils for {@link OBSFileSystem}.
  */
-@Deprecated
 final class OBSObjectBucketUtils {
     /**
      * Class logger.
      */
-    private static final Logger LOG = LoggerFactory.getLogger(
-        OBSObjectBucketUtils.class);
+    private static final Logger LOG = LoggerFactory.getLogger(OBSObjectBucketUtils.class);
 
     private OBSObjectBucketUtils() {
 
@@ -74,10 +72,8 @@ final class OBSObjectBucketUtils {
      * @throws IOException           on IO failure.
      * @throws ObsException          on failures inside the OBS SDK
      */
-    static boolean renameBasedOnObject(final OBSFileSystem owner,
-        final Path src, final Path dst) throws RenameFailedException,
-        FileNotFoundException, IOException,
-        ObsException {
+    static boolean renameBasedOnObject(final OBSFileSystem owner, final Path src, final Path dst)
+        throws RenameFailedException, FileNotFoundException, IOException, ObsException {
         String srcKey = OBSCommonUtils.pathToKey(owner, src);
         String dstKey = OBSCommonUtils.pathToKey(owner, dst);
 
@@ -88,8 +84,7 @@ final class OBSObjectBucketUtils {
 
         // get the source file status; this raises a FNFE if there is no source
         // file.
-        FileStatus srcStatus = OBSCommonUtils.innerGetFileStatusWithRetry(owner,
-            src);
+        FileStatus srcStatus = OBSCommonUtils.innerGetFileStatusWithRetry(owner, src);
 
         FileStatus dstStatus;
         try {
@@ -100,34 +95,23 @@ final class OBSObjectBucketUtils {
             // whether or not it can be the destination of the rename.
             if (dstStatus.isDirectory()) {
                 String newDstKey = OBSCommonUtils.maybeAddTrailingSlash(dstKey);
-                String filename = srcKey.substring(
-                    OBSCommonUtils.pathToKey(owner, src.getParent()).length()
-                        + 1);
+                String filename = srcKey.substring(OBSCommonUtils.pathToKey(owner, src.getParent()).length() + 1);
                 newDstKey = newDstKey + filename;
                 dstKey = newDstKey;
-                dstStatus = OBSCommonUtils.innerGetFileStatusWithRetry(
-                    owner, OBSCommonUtils.keyToPath(dstKey));
+                dstStatus = OBSCommonUtils.innerGetFileStatusWithRetry(owner, OBSCommonUtils.keyToPath(dstKey));
                 if (dstStatus.isDirectory()) {
-                    throw new RenameFailedException(src, dst,
-                        "new destination is an existed directory")
-                        .withExitCode(false);
+                    throw new RenameFailedException(src, dst, "new destination is an existed directory").withExitCode(
+                        false);
                 } else {
-                    throw new RenameFailedException(src, dst,
-                        "new destination is an existed file")
-                        .withExitCode(false);
+                    throw new RenameFailedException(src, dst, "new destination is an existed file").withExitCode(false);
                 }
             } else {
 
                 if (srcKey.equals(dstKey)) {
-                    LOG.warn(
-                        "rename: src and dest refer to the same file or"
-                            + " directory: {}",
-                        dst);
+                    LOG.warn("rename: src and dest refer to the same file or" + " directory: {}", dst);
                     return true;
                 } else {
-                    throw new RenameFailedException(src, dst,
-                        "destination is an existed file")
-                        .withExitCode(false);
+                    throw new RenameFailedException(src, dst, "destination is an existed file").withExitCode(false);
                 }
             }
         } catch (FileNotFoundException e) {
@@ -137,10 +121,8 @@ final class OBSObjectBucketUtils {
             checkDestinationParent(owner, src, dst);
         }
 
-        if (dstKey.startsWith(srcKey)
-            && dstKey.charAt(srcKey.length()) == Path.SEPARATOR_CHAR) {
-            LOG.error("rename: dest [{}] cannot be a descendant of src [{}]",
-                dst, src);
+        if (dstKey.startsWith(srcKey) && dstKey.charAt(srcKey.length()) == Path.SEPARATOR_CHAR) {
+            LOG.error("rename: dest [{}] cannot be a descendant of src [{}]", dst, src);
             return false;
         }
 
@@ -166,23 +148,18 @@ final class OBSObjectBucketUtils {
         return true;
     }
 
-    private static void checkDestinationParent(final OBSFileSystem owner,
-        final Path src,
-        final Path dst) throws IOException {
+    private static void checkDestinationParent(final OBSFileSystem owner, final Path src, final Path dst)
+        throws IOException {
         Path parent = dst.getParent();
         if (!OBSCommonUtils.pathToKey(owner, parent).isEmpty()) {
             try {
-                FileStatus dstParentStatus
-                    = OBSCommonUtils.innerGetFileStatusWithRetry(
-                    owner, dst.getParent());
+                FileStatus dstParentStatus = OBSCommonUtils.innerGetFileStatusWithRetry(owner, dst.getParent());
                 if (!dstParentStatus.isDirectory()) {
                     throw new ParentNotDirectoryException(
-                        "destination parent [" + dst.getParent()
-                            + "] is not a directory");
+                        "destination parent [" + dst.getParent() + "] is not a directory");
                 }
             } catch (FileNotFoundException e2) {
-                throw new RenameFailedException(src, dst,
-                    "destination has no parent ");
+                throw new RenameFailedException(src, dst, "destination has no parent ");
             }
         }
     }
@@ -196,11 +173,8 @@ final class OBSObjectBucketUtils {
      * @param srcStatus source object status
      * @throws IOException any problem with rename operation
      */
-    private static void renameFile(final OBSFileSystem owner,
-        final String srcKey,
-        final String dstKey,
-        final FileStatus srcStatus)
-        throws IOException {
+    private static void renameFile(final OBSFileSystem owner, final String srcKey, final String dstKey,
+        final FileStatus srcStatus) throws IOException {
         long startTime = System.nanoTime();
 
         copyFile(owner, srcKey, dstKey, srcStatus.getLen());
@@ -208,26 +182,17 @@ final class OBSObjectBucketUtils {
 
         if (LOG.isDebugEnabled()) {
             long delay = System.nanoTime() - startTime;
-            LOG.debug("OBSFileSystem rename: "
-                + ", {src="
-                + srcKey
-                + ", dst="
-                + dstKey
-                + ", delay="
-                + delay
-                + "}");
+            LOG.debug("OBSFileSystem rename: " + ", {src=" + srcKey + ", dst=" + dstKey + ", delay=" + delay + "}");
         }
     }
 
-    static boolean objectDelete(final OBSFileSystem owner,
-        final FileStatus status,
-        final boolean recursive) throws IOException {
+    static boolean objectDelete(final OBSFileSystem owner, final FileStatus status, final boolean recursive)
+        throws IOException {
         Path f = status.getPath();
         String key = OBSCommonUtils.pathToKey(owner, f);
 
         if (status.isDirectory()) {
-            LOG.debug("delete: Path is a directory: {} - recursive {}", f,
-                recursive);
+            LOG.debug("delete: Path is a directory: {} - recursive {}", f, recursive);
 
             key = OBSCommonUtils.maybeAddTrailingSlash(key);
             if (!key.endsWith("/")) {
@@ -236,8 +201,7 @@ final class OBSObjectBucketUtils {
 
             boolean isEmptyDir = OBSCommonUtils.isFolderEmpty(owner, key);
             if (key.equals("/")) {
-                return OBSCommonUtils.rejectRootDirectoryDelete(
-                    owner.getBucket(), isEmptyDir, recursive);
+                return OBSCommonUtils.rejectRootDirectoryDelete(owner.getBucket(), isEmptyDir, recursive);
             }
 
             if (!recursive && !isEmptyDir) {
@@ -245,15 +209,10 @@ final class OBSObjectBucketUtils {
             }
 
             if (isEmptyDir) {
-                LOG.debug(
-                    "delete: Deleting fake empty directory {} - recursive {}",
-                    f, recursive);
+                LOG.debug("delete: Deleting fake empty directory {} - recursive {}", f, recursive);
                 OBSCommonUtils.deleteObject(owner, key);
             } else {
-                LOG.debug(
-                    "delete: Deleting objects for directory prefix {} "
-                        + "- recursive {}",
-                    f, recursive);
+                LOG.debug("delete: Deleting objects for directory prefix {} " + "- recursive {}", f, recursive);
                 deleteNonEmptyDir(owner, recursive, key);
             }
 
@@ -277,9 +236,7 @@ final class OBSObjectBucketUtils {
      * @param dstKey destination folder key
      * @throws IOException any problem with rename folder
      */
-    static void renameFolder(final OBSFileSystem owner, final String srcKey,
-        final String dstKey)
-        throws IOException {
+    static void renameFolder(final OBSFileSystem owner, final String srcKey, final String dstKey) throws IOException {
         long startTime = System.nanoTime();
 
         List<KeyAndVersion> keysToDelete = new ArrayList<>();
@@ -302,15 +259,18 @@ final class OBSObjectBucketUtils {
                 }
 
                 keysToDelete.add(new KeyAndVersion(summary.getObjectKey()));
-                String newDstKey = dstKey + summary.getObjectKey()
-                    .substring(srcKey.length());
+                String newDstKey = dstKey + summary.getObjectKey().substring(srcKey.length());
                 copyfutures.add(
-                    copyFileAsync(owner, summary.getObjectKey(), newDstKey,
-                        summary.getMetadata().getContentLength()));
+                    copyFileAsync(owner, summary.getObjectKey(), newDstKey, summary.getMetadata().getContentLength()));
 
                 if (keysToDelete.size() == owner.getMaxEntriesToDelete()) {
                     waitAllCopyFinished(copyfutures);
                     copyfutures.clear();
+                    DeleteObjectsRequest deleteObjectsRequest = new DeleteObjectsRequest(owner.getBucket());
+                    deleteObjectsRequest.setKeyAndVersions(
+                        (KeyAndVersion[]) keysToDelete.toArray(new KeyAndVersion[0]));
+                    OBSCommonUtils.deleteObjects(owner, deleteObjectsRequest);
+                    keysToDelete.clear();
                 }
             }
 
@@ -318,6 +278,11 @@ final class OBSObjectBucketUtils {
                 if (!keysToDelete.isEmpty()) {
                     waitAllCopyFinished(copyfutures);
                     copyfutures.clear();
+                    DeleteObjectsRequest deleteObjectsRequest = new DeleteObjectsRequest(owner.getBucket());
+                    deleteObjectsRequest.setKeyAndVersions(
+                        (KeyAndVersion[]) keysToDelete.toArray(new KeyAndVersion[0]));
+                    OBSCommonUtils.deleteObjects(owner, deleteObjectsRequest);
+                    keysToDelete.clear();
                 }
                 break;
             }
@@ -326,44 +291,30 @@ final class OBSObjectBucketUtils {
 
         keysToDelete.add(new KeyAndVersion(srcKey));
 
-        DeleteObjectsRequest deleteObjectsRequest = new DeleteObjectsRequest(
-            owner.getBucket());
-        deleteObjectsRequest.setKeyAndVersions(
-            keysToDelete.toArray(new KeyAndVersion[0]));
+        DeleteObjectsRequest deleteObjectsRequest = new DeleteObjectsRequest(owner.getBucket());
+        deleteObjectsRequest.setKeyAndVersions(keysToDelete.toArray(new KeyAndVersion[0]));
         OBSCommonUtils.deleteObjects(owner, deleteObjectsRequest);
 
         if (LOG.isDebugEnabled()) {
             long delay = System.nanoTime() - startTime;
-            LOG.debug(
-                "OBSFileSystem rename: "
-                    + ", {src="
-                    + srcKey
-                    + ", dst="
-                    + dstKey
-                    + ", delay="
-                    + delay
-                    + "}");
+            LOG.debug("OBSFileSystem rename: " + ", {src=" + srcKey + ", dst=" + dstKey + ", delay=" + delay + "}");
         }
     }
 
-    private static void waitAllCopyFinished(
-        final List<Future<CopyObjectResult>> copyFutures)
-        throws IOException {
+    private static void waitAllCopyFinished(final List<Future<CopyObjectResult>> copyFutures) throws IOException {
         try {
             for (Future<CopyObjectResult> copyFuture : copyFutures) {
                 copyFuture.get();
             }
         } catch (InterruptedException e) {
             LOG.warn("Interrupted while copying objects (copy)");
-            throw new InterruptedIOException(
-                "Interrupted while copying objects (copy)");
+            throw new InterruptedIOException("Interrupted while copying objects (copy)");
         } catch (ExecutionException e) {
             for (Future<CopyObjectResult> future : copyFutures) {
                 future.cancel(true);
             }
 
-            throw OBSCommonUtils.extractException(
-                "waitAllCopyFinished", copyFutures.toString(), e);
+            throw OBSCommonUtils.extractException("waitAllCopyFinished", copyFutures.toString(), e);
         }
     }
 
@@ -374,8 +325,7 @@ final class OBSObjectBucketUtils {
      * @param key   key
      * @return the metadata
      */
-    protected static ObjectMetadata getObjectMetadata(final OBSFileSystem owner,
-        final String key) {
+    protected static ObjectMetadata getObjectMetadata(final OBSFileSystem owner, final String key) {
         GetObjectMetadataRequest request = new GetObjectMetadataRequest();
         request.setBucketName(owner.getBucket());
         request.setObjectKey(key);
@@ -402,11 +352,10 @@ final class OBSObjectBucketUtils {
         return om;
     }
 
-    private static void deleteNonEmptyDir(final OBSFileSystem owner,
-        final boolean recursive, final String key) throws IOException {
+    private static void deleteNonEmptyDir(final OBSFileSystem owner, final boolean recursive, final String key)
+        throws IOException {
         String delimiter = recursive ? null : "/";
-        ListObjectsRequest request = OBSCommonUtils.createListObjectsRequest(
-            owner, key, delimiter);
+        ListObjectsRequest request = OBSCommonUtils.createListObjectsRequest(owner, key, delimiter);
 
         ObjectListing objects = OBSCommonUtils.listObjects(owner, request);
         List<KeyAndVersion> keys = new ArrayList<>(objects.getObjects().size());
@@ -435,8 +384,7 @@ final class OBSObjectBucketUtils {
         }
     }
 
-    static void createFakeDirectoryIfNecessary(final OBSFileSystem owner,
-        final Path f)
+    static void createFakeDirectoryIfNecessary(final OBSFileSystem owner, final Path f)
         throws IOException, ObsException {
 
         String key = OBSCommonUtils.pathToKey(owner, f);
@@ -446,8 +394,7 @@ final class OBSObjectBucketUtils {
         }
     }
 
-    static void createFakeDirectory(final OBSFileSystem owner,
-        final String objectName)
+    static void createFakeDirectory(final OBSFileSystem owner, final String objectName)
         throws ObsException, IOException {
         String newObjectName = objectName;
         newObjectName = OBSCommonUtils.maybeAddTrailingSlash(newObjectName);
@@ -455,38 +402,31 @@ final class OBSObjectBucketUtils {
     }
 
     // Used to create an empty file that represents an empty directory
-    static void createEmptyObject(final OBSFileSystem owner,
-        final String objectName) throws IOException {
+    static void createEmptyObject(final OBSFileSystem owner, final String objectName) throws IOException {
         long delayMs;
         int retryTime = 0;
         long startTime = System.currentTimeMillis();
-        while (System.currentTimeMillis() - startTime
-            <= OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY) {
+        while (System.currentTimeMillis() - startTime <= OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY) {
             InputStream im = null;
             try {
                 im = new InputStream() {
-                        @Override
-                        public int read() {
-                            return -1;
-                        }
-                    };
-                PutObjectRequest putObjectRequest
-                    = OBSCommonUtils.newPutObjectRequest(owner, objectName,
+                    @Override
+                    public int read() {
+                        return -1;
+                    }
+                };
+                PutObjectRequest putObjectRequest = OBSCommonUtils.newPutObjectRequest(owner, objectName,
                     newObjectMetadata(0L), im);
                 owner.getObsClient().putObject(putObjectRequest);
                 owner.getSchemeStatistics().incrementWriteOps(1);
-                owner.getSchemeStatistics().incrementBytesWritten(
-                    putObjectRequest.getMetadata().getContentLength());
+                owner.getSchemeStatistics().incrementBytesWritten(putObjectRequest.getMetadata().getContentLength());
                 return;
             } catch (ObsException e) {
-                LOG.debug("Delete path failed with [{}], "
-                        + "retry time [{}] - request id [{}] - "
-                        + "error code [{}] - error message [{}]",
-                    e.getResponseCode(), retryTime, e.getErrorRequestId(),
+                LOG.debug("Delete path failed with [{}], " + "retry time [{}] - request id [{}] - "
+                        + "error code [{}] - error message [{}]", e.getResponseCode(), retryTime, e.getErrorRequestId(),
                     e.getErrorCode(), e.getErrorMessage());
 
-                IOException ioException = OBSCommonUtils.translateException(
-                    "innerCreateEmptyObject", objectName, e);
+                IOException ioException = OBSCommonUtils.translateException("innerCreateEmptyObject", objectName, e);
                 if (!(ioException instanceof OBSIOException)) {
                     throw ioException;
                 }
@@ -519,22 +459,19 @@ final class OBSObjectBucketUtils {
      * @throws InterruptedIOException the operation was interrupted
      * @throws IOException            Other IO problems
      */
-    static void copyFile(final OBSFileSystem owner, final String srcKey,
-        final String dstKey, final long size)
+    static void copyFile(final OBSFileSystem owner, final String srcKey, final String dstKey, final long size)
         throws IOException, InterruptedIOException {
         long delayMs;
         int retryTime = 0;
         long startTime = System.currentTimeMillis();
-        while (System.currentTimeMillis() - startTime
-            <= OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY) {
+        while (System.currentTimeMillis() - startTime <= OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY) {
             try {
                 innerCopyFile(owner, srcKey, dstKey, size);
                 return;
             } catch (InterruptedIOException e) {
                 throw e;
             } catch (OBSIOException e) {
-                String errMsg = String.format("Failed to copy file from %s to "
-                    + "%s with size %s,  retry time %s",
+                String errMsg = String.format("Failed to copy file from %s to " + "%s with size %s,  retry time %s",
                     srcKey, dstKey, size, retryTime);
                 LOG.debug(errMsg, e);
                 delayMs = OBSCommonUtils.getSleepTimeInMs(retryTime);
@@ -552,89 +489,66 @@ final class OBSObjectBucketUtils {
         }
     }
 
-    private static void innerCopyFile(final OBSFileSystem owner,
-        final String srcKey,
-        final String dstKey, final long size)
-        throws IOException {
+    private static void innerCopyFile(final OBSFileSystem owner, final String srcKey, final String dstKey,
+        final long size) throws IOException {
         LOG.debug("copyFile {} -> {} ", srcKey, dstKey);
         try {
             // 100MB per part
             if (size > owner.getCopyPartSize()) {
                 // initial copy part task
-                InitiateMultipartUploadRequest request
-                    = new InitiateMultipartUploadRequest(owner.getBucket(),
-                    dstKey);
+                InitiateMultipartUploadRequest request = new InitiateMultipartUploadRequest(owner.getBucket(), dstKey);
                 request.setAcl(owner.getCannedACL());
                 if (owner.getSse().isSseCEnable()) {
                     request.setSseCHeader(owner.getSse().getSseCHeader());
                 } else if (owner.getSse().isSseKmsEnable()) {
                     request.setSseKmsHeader(owner.getSse().getSseKmsHeader());
                 }
-                InitiateMultipartUploadResult result = owner.getObsClient()
-                    .initiateMultipartUpload(request);
+                InitiateMultipartUploadResult result = owner.getObsClient().initiateMultipartUpload(request);
 
                 final String uploadId = result.getUploadId();
                 LOG.debug("Multipart copy file, uploadId: {}", uploadId);
                 // count the parts
                 long partCount = calPartCount(owner.getCopyPartSize(), size);
 
-                final List<PartEtag> partEtags =
-                    getCopyFilePartEtags(owner, srcKey, dstKey, size, uploadId,
-                        partCount);
+                final List<PartEtag> partEtags = getCopyFilePartEtags(owner, srcKey, dstKey, size, uploadId, partCount);
                 // merge the copy parts
-                CompleteMultipartUploadRequest completeMultipartUploadRequest =
-                    new CompleteMultipartUploadRequest(owner.getBucket(),
-                        dstKey, uploadId, partEtags);
-                owner.getObsClient()
-                    .completeMultipartUpload(completeMultipartUploadRequest);
+                CompleteMultipartUploadRequest completeMultipartUploadRequest = new CompleteMultipartUploadRequest(
+                    owner.getBucket(), dstKey, uploadId, partEtags);
+                owner.getObsClient().completeMultipartUpload(completeMultipartUploadRequest);
             } else {
                 ObjectMetadata srcom = getObjectMetadata(owner, srcKey);
                 ObjectMetadata dstom = cloneObjectMetadata(srcom);
-                final CopyObjectRequest copyObjectRequest =
-                    new CopyObjectRequest(owner.getBucket(), srcKey,
-                        owner.getBucket(), dstKey);
+                final CopyObjectRequest copyObjectRequest = new CopyObjectRequest(owner.getBucket(), srcKey,
+                    owner.getBucket(), dstKey);
                 copyObjectRequest.setAcl(owner.getCannedACL());
                 copyObjectRequest.setNewObjectMetadata(dstom);
                 if (owner.getSse().isSseCEnable()) {
-                    copyObjectRequest.setSseCHeader(
-                        owner.getSse().getSseCHeader());
-                    copyObjectRequest.setSseCHeaderSource(
-                        owner.getSse().getSseCHeader());
+                    copyObjectRequest.setSseCHeader(owner.getSse().getSseCHeader());
+                    copyObjectRequest.setSseCHeaderSource(owner.getSse().getSseCHeader());
                 } else if (owner.getSse().isSseKmsEnable()) {
-                    copyObjectRequest.setSseKmsHeader(
-                        owner.getSse().getSseKmsHeader());
+                    copyObjectRequest.setSseKmsHeader(owner.getSse().getSseKmsHeader());
                 }
                 owner.getObsClient().copyObject(copyObjectRequest);
             }
 
             owner.getSchemeStatistics().incrementWriteOps(1);
         } catch (ObsException e) {
-            throw OBSCommonUtils.translateException(
-                "copyFile(" + srcKey + ", " + dstKey + ")", srcKey, e);
+            throw OBSCommonUtils.translateException("copyFile(" + srcKey + ", " + dstKey + ")", srcKey, e);
         }
     }
 
     static int calPartCount(final long partSize, final long cloudSize) {
         // get user setting of per copy part size ,default is 100MB
         // calculate the part count
-        long partCount = cloudSize % partSize == 0
-            ? cloudSize / partSize
-            : cloudSize / partSize + 1;
+        long partCount = cloudSize % partSize == 0 ? cloudSize / partSize : cloudSize / partSize + 1;
         return (int) partCount;
     }
 
-    static List<PartEtag> getCopyFilePartEtags(final OBSFileSystem owner,
-        final String srcKey,
-        final String dstKey,
-        final long objectSize,
-        final String uploadId,
-        final long partCount)
-        throws IOException {
-        final List<PartEtag> partEtags = Collections.synchronizedList(
-            new ArrayList<>());
+    static List<PartEtag> getCopyFilePartEtags(final OBSFileSystem owner, final String srcKey, final String dstKey,
+        final long objectSize, final String uploadId, final long partCount) throws IOException {
+        final List<PartEtag> partEtags = Collections.synchronizedList(new ArrayList<>());
         final List<Future<?>> partCopyFutures = new ArrayList<>();
-        submitCopyPartTasks(owner, srcKey, dstKey, objectSize, uploadId,
-            partCount, partEtags, partCopyFutures);
+        submitCopyPartTasks(owner, srcKey, dstKey, objectSize, uploadId, partCount, partEtags, partCopyFutures);
 
         // wait the tasks for completing
         try {
@@ -643,8 +557,7 @@ final class OBSObjectBucketUtils {
             }
         } catch (InterruptedException e) {
             LOG.warn("Interrupted while copying objects (copy)");
-            throw new InterruptedIOException(
-                "Interrupted while copying objects (copy)");
+            throw new InterruptedIOException("Interrupted while copying objects (copy)");
         } catch (ExecutionException e) {
             LOG.error("Multipart copy file exception.", e);
             for (Future<?> future : partCopyFutures) {
@@ -652,13 +565,10 @@ final class OBSObjectBucketUtils {
             }
 
             owner.getObsClient()
-                .abortMultipartUpload(
-                    new AbortMultipartUploadRequest(owner.getBucket(), dstKey,
-                        uploadId));
+                .abortMultipartUpload(new AbortMultipartUploadRequest(owner.getBucket(), dstKey, uploadId));
 
             throw OBSCommonUtils.extractException(
-                "Multi-part copy with id '" + uploadId + "' from " + srcKey
-                    + "to " + dstKey, dstKey, e);
+                "Multi-part copy with id '" + uploadId + "' from " + srcKey + "to " + dstKey, dstKey, e);
         }
 
         // Make part numbers in ascending order
@@ -667,45 +577,31 @@ final class OBSObjectBucketUtils {
     }
 
     @SuppressWarnings("checkstyle:ParameterNumber")
-    private static void submitCopyPartTasks(final OBSFileSystem owner,
-        final String srcKey,
-        final String dstKey,
-        final long objectSize,
-        final String uploadId,
-        final long partCount,
-        final List<PartEtag> partEtags,
+    private static void submitCopyPartTasks(final OBSFileSystem owner, final String srcKey, final String dstKey,
+        final long objectSize, final String uploadId, final long partCount, final List<PartEtag> partEtags,
         final List<Future<?>> partCopyFutures) {
         for (int i = 0; i < partCount; i++) {
             final long rangeStart = i * owner.getCopyPartSize();
-            final long rangeEnd = (i + 1 == partCount)
-                ? objectSize - 1
-                : rangeStart + owner.getCopyPartSize() - 1;
+            final long rangeEnd = (i + 1 == partCount) ? objectSize - 1 : rangeStart + owner.getCopyPartSize() - 1;
             final int partNumber = i + 1;
-            partCopyFutures.add(
-                owner.getBoundedCopyPartThreadPool().submit(() -> {
-                    CopyPartRequest request = new CopyPartRequest();
-                    request.setUploadId(uploadId);
-                    request.setSourceBucketName(owner.getBucket());
-                    request.setSourceObjectKey(srcKey);
-                    request.setDestinationBucketName(owner.getBucket());
-                    request.setDestinationObjectKey(dstKey);
-                    request.setByteRangeStart(rangeStart);
-                    request.setByteRangeEnd(rangeEnd);
-                    request.setPartNumber(partNumber);
-                    if (owner.getSse().isSseCEnable()) {
-                        request.setSseCHeaderSource(
-                            owner.getSse().getSseCHeader());
-                        request.setSseCHeaderDestination(
-                            owner.getSse().getSseCHeader());
-                    }
-                    CopyPartResult result = owner.getObsClient()
-                        .copyPart(request);
-                    partEtags.add(
-                        new PartEtag(result.getEtag(), result.getPartNumber()));
-                    LOG.debug(
-                        "Multipart copy file, uploadId: {}, Part#{} done.",
-                        uploadId, partNumber);
-                }));
+            partCopyFutures.add(owner.getBoundedCopyPartThreadPool().submit(() -> {
+                CopyPartRequest request = new CopyPartRequest();
+                request.setUploadId(uploadId);
+                request.setSourceBucketName(owner.getBucket());
+                request.setSourceObjectKey(srcKey);
+                request.setDestinationBucketName(owner.getBucket());
+                request.setDestinationObjectKey(dstKey);
+                request.setByteRangeStart(rangeStart);
+                request.setByteRangeEnd(rangeEnd);
+                request.setPartNumber(partNumber);
+                if (owner.getSse().isSseCEnable()) {
+                    request.setSseCHeaderSource(owner.getSse().getSseCHeader());
+                    request.setSseCHeaderDestination(owner.getSse().getSseCHeader());
+                }
+                CopyPartResult result = owner.getObsClient().copyPart(request);
+                partEtags.add(new PartEtag(result.getEtag(), result.getPartNumber()));
+                LOG.debug("Multipart copy file, uploadId: {}, Part#{} done.", uploadId, partNumber);
+            }));
         }
     }
 
@@ -717,8 +613,7 @@ final class OBSObjectBucketUtils {
      * @param source the {@link ObjectMetadata} to copy
      * @return a copy of {@link ObjectMetadata} with only relevant attributes
      */
-    private static ObjectMetadata cloneObjectMetadata(
-        final ObjectMetadata source) {
+    private static ObjectMetadata cloneObjectMetadata(final ObjectMetadata source) {
         // This approach may be too brittle, especially if
         // in future there are new attributes added to ObjectMetadata
         // that we do not explicitly call to set here
@@ -730,9 +625,7 @@ final class OBSObjectBucketUtils {
         return ret;
     }
 
-    static OBSFileStatus innerGetObjectStatus(final OBSFileSystem owner,
-        final Path f)
-        throws IOException {
+    static OBSFileStatus innerGetObjectStatus(final OBSFileSystem owner, final Path f) throws IOException {
         final Path path = OBSCommonUtils.qualify(owner, f);
         String key = OBSCommonUtils.pathToKey(owner, path);
         LOG.debug("Getting path status for {}  ({})", path, key);
@@ -740,21 +633,17 @@ final class OBSObjectBucketUtils {
             try {
                 ObjectMetadata meta = getObjectMetadata(owner, key);
 
-                if (OBSCommonUtils.objectRepresentsDirectory(key,
-                    meta.getContentLength())) {
+                if (OBSCommonUtils.objectRepresentsDirectory(key, meta.getContentLength())) {
                     LOG.debug("Found exact file: fake directory");
                     return new OBSFileStatus(path, owner.getShortUserName());
                 } else {
                     LOG.debug("Found exact file: normal file");
-                    return new OBSFileStatus(meta.getContentLength(),
-                        OBSCommonUtils.dateToLong(meta.getLastModified()),
-                        path, owner.getDefaultBlockSize(path),
-                        owner.getShortUserName());
+                    return new OBSFileStatus(meta.getContentLength(), OBSCommonUtils.dateToLong(meta.getLastModified()),
+                        path, owner.getDefaultBlockSize(path), owner.getShortUserName());
                 }
             } catch (ObsException e) {
                 if (e.getResponseCode() != OBSCommonUtils.NOT_FOUND_CODE) {
-                    throw OBSCommonUtils.translateException("getFileStatus",
-                        path, e);
+                    throw OBSCommonUtils.translateException("getFileStatus", path, e);
                 }
             }
 
@@ -763,26 +652,19 @@ final class OBSObjectBucketUtils {
                 try {
                     ObjectMetadata meta = getObjectMetadata(owner, newKey);
 
-                    if (OBSCommonUtils.objectRepresentsDirectory(newKey,
-                        meta.getContentLength())) {
+                    if (OBSCommonUtils.objectRepresentsDirectory(newKey, meta.getContentLength())) {
                         LOG.debug("Found file (with /): fake directory");
                         return new OBSFileStatus(path, owner.getShortUserName());
                     } else {
-                        LOG.debug(
-                            "Found file (with /): real file? should not "
-                                + "happen: {}",
-                            key);
+                        LOG.debug("Found file (with /): real file? should not " + "happen: {}", key);
 
                         return new OBSFileStatus(meta.getContentLength(),
-                            OBSCommonUtils.dateToLong(meta.getLastModified()),
-                            path,
-                            owner.getDefaultBlockSize(path),
+                            OBSCommonUtils.dateToLong(meta.getLastModified()), path, owner.getDefaultBlockSize(path),
                             owner.getShortUserName());
                     }
                 } catch (ObsException e) {
                     if (e.getResponseCode() != OBSCommonUtils.NOT_FOUND_CODE) {
-                        throw OBSCommonUtils.translateException("getFileStatus",
-                            newKey, e);
+                        throw OBSCommonUtils.translateException("getFileStatus", newKey, e);
                     }
                 }
             }
@@ -794,8 +676,7 @@ final class OBSObjectBucketUtils {
             return new OBSFileStatus(path, owner.getShortUserName());
         } catch (ObsException e) {
             if (e.getResponseCode() != OBSCommonUtils.NOT_FOUND_CODE) {
-                throw OBSCommonUtils.translateException("getFileStatus", key,
-                    e);
+                throw OBSCommonUtils.translateException("getFileStatus", key, e);
             }
         }
 
@@ -803,8 +684,7 @@ final class OBSObjectBucketUtils {
         throw new FileNotFoundException("No such file or directory: " + path);
     }
 
-    static ContentSummary getDirectoryContentSummary(final OBSFileSystem owner,
-        final String key) throws IOException {
+    static ContentSummary getDirectoryContentSummary(final OBSFileSystem owner, final String key) throws IOException {
         String newKey = key;
         newKey = OBSCommonUtils.maybeAddTrailingSlash(newKey);
         long[] summary = {0, 0, 1};
@@ -816,11 +696,9 @@ final class OBSObjectBucketUtils {
         request.setMaxKeys(owner.getMaxKeys());
         ObjectListing objects = OBSCommonUtils.listObjects(owner, request);
         while (true) {
-            if (!objects.getCommonPrefixes().isEmpty() || !objects.getObjects()
-                .isEmpty()) {
+            if (!objects.getCommonPrefixes().isEmpty() || !objects.getObjects().isEmpty()) {
                 if (LOG.isDebugEnabled()) {
-                    LOG.debug("Found path as directory (with /): {}/{}",
-                        objects.getCommonPrefixes().size(),
+                    LOG.debug("Found path as directory (with /): {}/{}", objects.getCommonPrefixes().size(),
                         objects.getObjects().size());
                 }
                 for (String prefix : objects.getCommonPrefixes()) {
@@ -829,8 +707,7 @@ final class OBSObjectBucketUtils {
                 }
 
                 for (ObsObject obj : objects.getObjects()) {
-                    LOG.debug("Summary: {} {}", obj.getObjectKey(),
-                        obj.getMetadata().getContentLength());
+                    LOG.debug("Summary: {} {}", obj.getObjectKey(), obj.getMetadata().getContentLength());
                     if (!obj.getObjectKey().endsWith("/")) {
                         summary[0] += obj.getMetadata().getContentLength();
                         summary[1] += 1;
@@ -844,18 +721,17 @@ final class OBSObjectBucketUtils {
             objects = OBSCommonUtils.continueListObjects(owner, objects);
         }
         summary[2] += directories.size();
-        LOG.debug(String.format(
-            "file size [%d] - file count [%d] - directory count [%d] - "
-                + "file path [%s]",
-            summary[0],
-            summary[1], summary[2], newKey));
+        LOG.debug(
+            String.format("file size [%d] - file count [%d] - directory count [%d] - " + "file path [%s]", summary[0],
+                summary[1], summary[2], newKey));
         return new ContentSummary.Builder().length(summary[0])
-            .fileCount(summary[1]).directoryCount(summary[2])
-            .spaceConsumed(summary[0]).build();
+            .fileCount(summary[1])
+            .directoryCount(summary[2])
+            .spaceConsumed(summary[0])
+            .build();
     }
 
-    private static void getDirectories(final String key, final String sourceKey,
-        final Set<String> directories) {
+    private static void getDirectories(final String key, final String sourceKey, final Set<String> directories) {
         Path p = new Path(key);
         Path sourcePath = new Path(sourceKey);
         // directory must add first
@@ -871,9 +747,7 @@ final class OBSObjectBucketUtils {
         }
     }
 
-    private static Future<CopyObjectResult> copyFileAsync(
-        final OBSFileSystem owner,
-        final String srcKey,
+    private static Future<CopyObjectResult> copyFileAsync(final OBSFileSystem owner, final String srcKey,
         final String dstKey, final long size) {
         return owner.getBoundedCopyThreadPool().submit(() -> {
             copyFile(owner, srcKey, dstKey, size);

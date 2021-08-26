@@ -18,6 +18,8 @@
 
 package org.apache.hadoop.fs.obs;
 
+import static org.apache.commons.lang.StringUtils.equalsIgnoreCase;
+
 import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
@@ -31,8 +33,6 @@ import java.net.URISyntaxException;
 import java.net.URLDecoder;
 import java.util.Objects;
 
-import static org.apache.commons.lang.StringUtils.equalsIgnoreCase;
-
 /**
  * Helper for OBS login.
  */
@@ -40,16 +40,14 @@ final class OBSLoginHelper {
     /**
      * login warning.
      */
-    public static final String LOGIN_WARNING =
-        "The Filesystem URI contains login details."
-            + " This is insecure and may be unsupported in future.";
+    public static final String LOGIN_WARNING = "The Filesystem URI contains login details."
+        + " This is insecure and may be unsupported in future.";
 
     /**
      * plus warning.
      */
-    public static final String PLUS_WARNING =
-        "Secret key contains a special character that should be URL encoded! "
-            + "Attempting to resolve...";
+    public static final String PLUS_WARNING = "Secret key contains a special character that should be URL encoded! "
+        + "Attempting to resolve...";
 
     /**
      * defined plus unencoded char.
@@ -64,8 +62,7 @@ final class OBSLoginHelper {
     /**
      * Class logger.
      */
-    private static final Logger LOG = LoggerFactory.getLogger(
-        OBSLoginHelper.class);
+    private static final Logger LOG = LoggerFactory.getLogger(OBSLoginHelper.class);
 
     private OBSLoginHelper() {
     }
@@ -83,11 +80,8 @@ final class OBSLoginHelper {
         Objects.requireNonNull(uri, "null uri");
         Objects.requireNonNull(uri.getScheme(), "null uri.getScheme()");
         if (uri.getHost() == null && uri.getAuthority() != null) {
-            Objects.requireNonNull(
-                uri.getHost(),
-                "null uri host."
-                    + " This can be caused by unencoded / in the "
-                    + "password string");
+            Objects.requireNonNull(uri.getHost(),
+                "null uri host." + " This can be caused by unencoded / in the " + "password string");
         }
         Objects.requireNonNull(uri.getHost(), "null uri host.");
         return URI.create(uri.getScheme() + "://" + uri.getHost());
@@ -101,8 +95,7 @@ final class OBSLoginHelper {
      */
     public static String toString(final URI pathUri) {
         return pathUri != null
-            ? String.format("%s://%s/%s", pathUri.getScheme(),
-            pathUri.getHost(), pathUri.getPath())
+            ? String.format("%s://%s/%s", pathUri.getScheme(), pathUri.getHost(), pathUri.getPath())
             : "(null URI)";
     }
 
@@ -145,8 +138,7 @@ final class OBSLoginHelper {
                 String encodedPassword = login.substring(loginSplit + 1);
                 if (encodedPassword.contains(PLUS_UNENCODED)) {
                     LOG.warn(PLUS_WARNING);
-                    encodedPassword = encodedPassword.replaceAll(
-                        "\\" + PLUS_UNENCODED, PLUS_ENCODED);
+                    encodedPassword = encodedPassword.replaceAll("\\" + PLUS_UNENCODED, PLUS_ENCODED);
                 }
                 String password = URLDecoder.decode(encodedPassword, "UTF-8");
                 return new Login(user, password);
@@ -178,19 +170,11 @@ final class OBSLoginHelper {
         if (uri.getPort() == -1 && defaultPort > 0) {
             // reconstruct the uri with the default port set
             try {
-                newUri =
-                    new URI(
-                        newUri.getScheme(),
-                        null,
-                        newUri.getHost(),
-                        defaultPort,
-                        newUri.getPath(),
-                        newUri.getQuery(),
-                        newUri.getFragment());
+                newUri = new URI(newUri.getScheme(), null, newUri.getHost(), defaultPort, newUri.getPath(),
+                    newUri.getQuery(), newUri.getFragment());
             } catch (URISyntaxException e) {
                 // Should never happen!
-                throw new AssertionError(
-                    "Valid URI became unparseable: " + newUri);
+                throw new AssertionError("Valid URI became unparseable: " + newUri);
             }
         }
 
@@ -222,8 +206,7 @@ final class OBSLoginHelper {
      * @param path        path to check
      * @param defaultPort default port of FS
      */
-    public static void checkPath(final Configuration conf, final URI fsUri,
-        final Path path, final int defaultPort) {
+    public static void checkPath(final Configuration conf, final URI fsUri, final Path path, final int defaultPort) {
         URI pathUri = path.toUri();
         String thatScheme = pathUri.getScheme();
         if (thatScheme == null) {
@@ -236,13 +219,11 @@ final class OBSLoginHelper {
         if (equalsIgnoreCase(thisScheme, thatScheme)) { // schemes match
             String thisHost = thisUri.getHost();
             String thatHost = pathUri.getHost();
-            if (thatHost == null
-                && // path's host is null
+            if (thatHost == null && // path's host is null
                 thisHost != null) { // fs has a host
                 URI defaultUri = FileSystem.getDefaultUri(conf);
                 if (equalsIgnoreCase(thisScheme, defaultUri.getScheme())) {
-                    pathUri
-                        = defaultUri; // schemes match, so use this uri instead
+                    pathUri = defaultUri; // schemes match, so use this uri instead
                 } else {
                     pathUri = null; // can't determine auth of the path
                 }
@@ -257,9 +238,7 @@ final class OBSLoginHelper {
             }
         }
         // make sure the exception strips out any auth details
-        throw new IllegalArgumentException(
-            "Wrong FS " + OBSLoginHelper.toString(pathUri) + " -expected "
-                + fsUri);
+        throw new IllegalArgumentException("Wrong FS " + OBSLoginHelper.toString(pathUri) + " -expected " + fsUri);
     }
 
     /**
@@ -298,8 +277,7 @@ final class OBSLoginHelper {
             this(userName, passwd, null);
         }
 
-        Login(final String userName, final String passwd,
-            final String sessionToken) {
+        Login(final String userName, final String passwd, final String sessionToken) {
             this.user = userName;
             this.password = passwd;
             this.token = sessionToken;
@@ -329,8 +307,7 @@ final class OBSLoginHelper {
                 return false;
             }
             Login that = (Login) o;
-            return Objects.equals(user, that.user) && Objects.equals(password,
-                that.password);
+            return Objects.equals(user, that.user) && Objects.equals(password, that.password);
         }
 
         @Override

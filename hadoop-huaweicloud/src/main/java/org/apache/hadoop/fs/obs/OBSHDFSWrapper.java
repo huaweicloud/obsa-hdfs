@@ -22,31 +22,21 @@ import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.DelegateToFileSystem;
+import org.apache.hadoop.hdfs.protocol.HdfsConstants;
 
 import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
 
 /**
- * OBS implementation of AbstractFileSystem, which delegates to the {@link
- * OBSFileSystem}.
+ * Implementation of AbstractFileSystem based on the existing implementation of
+ * {@link OBSHDFSFileSystem}.
  */
 @InterfaceAudience.Public
 @InterfaceStability.Evolving
-public final class OBS extends DelegateToFileSystem {
+public class OBSHDFSWrapper extends DelegateToFileSystem {
 
-    /**
-     * @param theUri URI of the file system
-     * @param conf   Configuration for the file system
-     * @throws IOException        on any failure to initialize this instance
-     * @throws URISyntaxException <code>theUri</code> has syntax error
-     */
-    public OBS(final URI theUri, final Configuration conf) throws IOException, URISyntaxException {
-        super(theUri, new OBSFileSystem(), conf, "obs", false);
-    }
-
-    @Override
-    public int getUriDefaultPort() {
-        return OBSConstants.OBS_DEFAULT_PORT;
+    protected OBSHDFSWrapper(final URI theUri, final Configuration conf) throws IOException, URISyntaxException {
+        super(theUri, new OBSHDFSFileSystem(), conf, HdfsConstants.HDFS_URI_SCHEME, false);
     }
 }

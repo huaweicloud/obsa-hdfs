@@ -42,14 +42,12 @@ import java.util.concurrent.atomic.AtomicInteger;
  * /apache/s4/comm/staging/BlockingThreadPoolExecutorService.java)
  */
 @InterfaceAudience.Private
-final class BlockingThreadPoolExecutorService
-    extends SemaphoredDelegatingExecutor {
+final class BlockingThreadPoolExecutorService extends SemaphoredDelegatingExecutor {
 
     /**
      * Class logger.
      */
-    private static final Logger LOG =
-        LoggerFactory.getLogger(BlockingThreadPoolExecutorService.class);
+    private static final Logger LOG = LoggerFactory.getLogger(BlockingThreadPoolExecutorService.class);
 
     /**
      * Number of thread pools.
@@ -61,10 +59,8 @@ final class BlockingThreadPoolExecutorService
      */
     private final ThreadPoolExecutor eventProcessingExecutor;
 
-    private BlockingThreadPoolExecutorService(
-        final int permitCount, final ThreadPoolExecutor executor) {
-        super(MoreExecutors.listeningDecorator(executor),
-            permitCount, false);
+    private BlockingThreadPoolExecutorService(final int permitCount, final ThreadPoolExecutor executor) {
+        super(MoreExecutors.listeningDecorator(executor), permitCount, false);
         this.eventProcessingExecutor = executor;
     }
 
@@ -83,8 +79,7 @@ final class BlockingThreadPoolExecutorService
 
             @Override
             public Thread newThread(@NotNull final Runnable r) {
-                final String name = prefix + "-pool" + poolNum + "-t"
-                    + threadNumber.getAndIncrement();
+                final String name = prefix + "-pool" + poolNum + "-t" + threadNumber.getAndIncrement();
                 return new Thread(r, name);
             }
         };
@@ -122,31 +117,20 @@ final class BlockingThreadPoolExecutorService
      * @param prefixName    prefix of name for threads
      * @return new instance of BlockingThreadPoolExecutorService
      */
-    static BlockingThreadPoolExecutorService newInstance(
-        final int activeTasks, final int waitingTasks, final long keepAliveTime,
-        final String prefixName) {
+    static BlockingThreadPoolExecutorService newInstance(final int activeTasks, final int waitingTasks,
+        final long keepAliveTime, final String prefixName) {
 
     /* Although we generally only expect up to waitingTasks tasks in the
     queue, we need to be able to buffer all tasks in case dequeueing is
     slower than enqueueing. */
-        final BlockingQueue<Runnable> workQueue = new LinkedBlockingQueue<>(
-            waitingTasks + activeTasks);
-        ThreadPoolExecutor eventProcessingExecutor =
-            new ThreadPoolExecutor(
-                activeTasks,
-                activeTasks,
-                keepAliveTime,
-                TimeUnit.SECONDS,
-                workQueue,
-                newDaemonThreadFactory(prefixName),
-                (r, executor) -> {
-                    // This is not expected to happen.
-                    LOG.error("Could not submit task to executor {}",
-                        executor.toString());
-                });
+        final BlockingQueue<Runnable> workQueue = new LinkedBlockingQueue<>(waitingTasks + activeTasks);
+        ThreadPoolExecutor eventProcessingExecutor = new ThreadPoolExecutor(activeTasks, activeTasks, keepAliveTime,
+            TimeUnit.SECONDS, workQueue, newDaemonThreadFactory(prefixName), (r, executor) -> {
+            // This is not expected to happen.
+            LOG.error("Could not submit task to executor {}", executor.toString());
+        });
         eventProcessingExecutor.allowCoreThreadTimeOut(true);
-        return new BlockingThreadPoolExecutorService(
-            waitingTasks + activeTasks, eventProcessingExecutor);
+        return new BlockingThreadPoolExecutorService(waitingTasks + activeTasks, eventProcessingExecutor);
     }
 
     /**
@@ -160,7 +144,6 @@ final class BlockingThreadPoolExecutorService
 
     @Override
     public String toString() {
-        return "BlockingThreadPoolExecutorService{" + super.toString()
-            + ", activeCount=" + getActiveCount() + '}';
+        return "BlockingThreadPoolExecutorService{" + super.toString() + ", activeCount=" + getActiveCount() + '}';
     }
 }

@@ -20,6 +20,7 @@ package org.apache.hadoop.fs.obs;
 
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
+import org.apache.hadoop.fs.obs.input.OBSInputStream;
 
 /**
  * All constants used by {@link OBSFileSystem}.
@@ -30,39 +31,36 @@ import org.apache.hadoop.classification.InterfaceStability;
  */
 @InterfaceAudience.Public
 @InterfaceStability.Evolving
-final class OBSConstants {
+public final class OBSConstants {
     /**
      * Minimum multipart size which OBS supports.
      */
-    static final int MULTIPART_MIN_SIZE = 5 * 1024 * 1024;
+    public static final int MULTIPART_MIN_SIZE = 5 * 1024 * 1024;
 
     /**
      * OBS access key.
      */
-    static final String ACCESS_KEY = "fs.obs.access.key";
+    public static final String ACCESS_KEY = "fs.obs.access.key";
 
     /**
      * OBS secret key.
      */
-    static final String SECRET_KEY = "fs.obs.secret.key";
+    public static final String SECRET_KEY = "fs.obs.secret.key";
 
     /**
      * OBS credentials provider.
      */
-    static final String OBS_CREDENTIALS_PROVIDER
-        = "fs.obs.credentials.provider";
+    static final String OBS_CREDENTIALS_PROVIDER = "fs.obs.credentials.provider";
 
     /**
      * OBS metrics consumer.
      */
-    static final String OBS_METRICS_CONSUMER
-        = "fs.obs.metrics.consumer";
+    static final String OBS_METRICS_CONSUMER = "fs.obs.metrics.consumer";
 
     /**
      * Default value of {@link #OBS_METRICS_CONSUMER}.
      */
-    static final Class<? extends BasicMetricsConsumer>
-        DEFAULT_OBS_METRICS_CONSUMER = DefaultMetricsConsumer.class;
+    static final Class<? extends BasicMetricsConsumer> DEFAULT_OBS_METRICS_CONSUMER = DefaultMetricsConsumer.class;
 
     /**
      * OBS client security provider.
@@ -74,14 +72,12 @@ final class OBSConstants {
      * {@code "hadoop.security.credential.provider.path"}. This extra option
      * allows for per-bucket overrides.
      */
-    static final String OBS_SECURITY_CREDENTIAL_PROVIDER_PATH =
-        "fs.obs.security.credential.provider.path";
+    static final String OBS_SECURITY_CREDENTIAL_PROVIDER_PATH = "fs.obs.security.credential.provider.path";
 
     /**
      * Switch for whether need to verify buffer dir accessibility.
      */
-    static final String VERIFY_BUFFER_DIR_ACCESSIBLE_ENABLE =
-        "fs.obs.bufferdir.verify.enable";
+    static final String VERIFY_BUFFER_DIR_ACCESSIBLE_ENABLE = "fs.obs.bufferdir.verify.enable";
 
     /**
      * Session token for when using TemporaryOBSCredentialsProvider.
@@ -111,7 +107,7 @@ final class OBSConstants {
     /**
      * Use a custom endpoint.
      */
-    static final String ENDPOINT = "fs.obs.endpoint";
+    public static final String ENDPOINT = "fs.obs.endpoint";
 
     /**
      * Host for connecting to OBS through proxy server.
@@ -166,8 +162,7 @@ final class OBSConstants {
     /**
      * Seconds until we give up trying to establish a connection to obs.
      */
-    static final String ESTABLISH_TIMEOUT
-        = "fs.obs.connection.establish.timeout";
+    static final String ESTABLISH_TIMEOUT = "fs.obs.connection.establish.timeout";
 
     /**
      * Default value of {@link #ESTABLISH_TIMEOUT}.
@@ -274,7 +269,7 @@ final class OBSConstants {
     /**
      * Size of each of or multipart pieces in bytes.
      */
-    static final String MULTIPART_SIZE = "fs.obs.multipart.size";
+    public static final String MULTIPART_SIZE = "fs.obs.multipart.size";
 
     /**
      * Default value of {@link #MULTIPART_SIZE}.
@@ -290,8 +285,7 @@ final class OBSConstants {
      * Max number of objects in one multi-object delete call. This option takes
      * effect only when the option 'ENABLE_MULTI_DELETE' is set to 'true'.
      */
-    static final String MULTI_DELETE_MAX_NUMBER
-        = "fs.obs.multiobjectdelete.maximum";
+    static final String MULTI_DELETE_MAX_NUMBER = "fs.obs.multiobjectdelete.maximum";
 
     /**
      * Default value of {@link #MULTI_DELETE_MAX_NUMBER}.
@@ -301,8 +295,7 @@ final class OBSConstants {
     /**
      * Minimum number of objects in one multi-object delete call.
      */
-    static final String MULTI_DELETE_THRESHOLD
-        = "fs.obs.multiobjectdelete.threshold";
+    static final String MULTI_DELETE_THRESHOLD = "fs.obs.multiobjectdelete.threshold";
 
     /**
      * Default value of {@link #MULTI_DELETE_THRESHOLD}.
@@ -317,14 +310,14 @@ final class OBSConstants {
     /**
      * Switch to the fast block-by-block upload mechanism.
      */
-    static final String FAST_UPLOAD = "fs.obs.fast.upload";
+    public static final String FAST_UPLOAD = "fs.obs.fast.upload";
 
     /**
      * What buffer to use. Default is {@link #FAST_UPLOAD_BUFFER_DISK} Value:
      * {@value}
      */
     @InterfaceStability.Unstable
-    static final String FAST_UPLOAD_BUFFER = "fs.obs.fast.upload.buffer";
+    public static final String FAST_UPLOAD_BUFFER = "fs.obs.fast.upload.buffer";
 
     /**
      * Buffer blocks to disk: {@value}. Capacity is limited to available disk
@@ -337,7 +330,7 @@ final class OBSConstants {
      * Use an in-memory array. Fast but will run of heap rapidly: {@value}.
      */
     @InterfaceStability.Unstable
-    static final String FAST_UPLOAD_BUFFER_ARRAY = "array";
+    public static final String FAST_UPLOAD_BUFFER_ARRAY = "array";
 
     /**
      * Use a byte buffer. May be more memory efficient than the {@link
@@ -355,8 +348,7 @@ final class OBSConstants {
      * <p>Default is {@link #DEFAULT_FAST_UPLOAD_ACTIVE_BLOCKS}
      */
     @InterfaceStability.Unstable
-    static final String FAST_UPLOAD_ACTIVE_BLOCKS
-        = "fs.obs.fast.upload.active.blocks";
+    static final String FAST_UPLOAD_ACTIVE_BLOCKS = "fs.obs.fast.upload.active.blocks";
 
     /**
      * Limit of queued block upload operations before writes block. Value:
@@ -390,8 +382,7 @@ final class OBSConstants {
     /**
      * Purge any multipart uploads older than this number of seconds.
      */
-    static final String PURGE_EXISTING_MULTIPART_AGE
-        = "fs.obs.multipart.purge.age";
+    static final String PURGE_EXISTING_MULTIPART_AGE = "fs.obs.multipart.purge.age";
 
     /**
      * Default value of {@link #PURGE_EXISTING_MULTIPART_AGE}.
@@ -440,14 +431,31 @@ final class OBSConstants {
     static final String USER_AGENT_PREFIX = "fs.obs.user.agent.prefix";
 
     /**
+     * what read policy to use. Default is {@link #READAHEAD_POLICY_PRIMARY} Value:
+     * {@value}
+     */
+    @InterfaceStability.Unstable
+    public static final String READAHEAD_POLICY = "fs.obs.readahead.policy";
+
+    @InterfaceStability.Unstable
+    public static final String READAHEAD_POLICY_PRIMARY = "primary";
+
+    @InterfaceStability.Unstable
+    public static final String READAHEAD_POLICY_ADVANCE = "advance";
+
+    /**
      * Read ahead buffer size to prevent connection re-establishments.
      */
-    static final String READAHEAD_RANGE = "fs.obs.readahead.range";
+    public static final String READAHEAD_RANGE = "fs.obs.readahead.range";
 
     /**
      * Default value of {@link #READAHEAD_RANGE}.
      */
-    static final long DEFAULT_READAHEAD_RANGE = 1024 * 1024;
+    public static final long DEFAULT_READAHEAD_RANGE = 1024 * 1024;
+
+    public static final String READAHEAD_MAX_NUM = "fs.obs.readahead.max.number";
+
+    public static final int DEFAULT_READAHEAD_MAX_NUM = 4;
 
     /**
      * Flag indicating if
@@ -456,24 +464,21 @@ final class OBSConstants {
      * {@link org.apache.hadoop.fs.FSInputStream#read(long,
      * byte[], int, int)}.
      */
-    static final String READ_TRANSFORM_ENABLE = "fs.obs.read.transform.enable";
+    public static final String READAHEAD_TRANSFORM_ENABLE = "fs.obs.read.transform.enable";
 
     /**
      * OBS client factory implementation class.
      */
     @InterfaceAudience.Private
     @InterfaceStability.Unstable
-    static final String OBS_CLIENT_FACTORY_IMPL
-        = "fs.obs.client.factory.impl";
+    static final String OBS_CLIENT_FACTORY_IMPL = "fs.obs.client.factory.impl";
 
     /**
      * Default value of {@link #OBS_CLIENT_FACTORY_IMPL}.
      */
     @InterfaceAudience.Private
     @InterfaceStability.Unstable
-    static final Class<? extends OBSClientFactory>
-        DEFAULT_OBS_CLIENT_FACTORY_IMPL =
-        DefaultOBSClientFactory.class;
+    static final Class<? extends OBSClientFactory> DEFAULT_OBS_CLIENT_FACTORY_IMPL = DefaultOBSClientFactory.class;
 
     /**
      * Maximum number of partitions in a multipart upload: {@value}.
@@ -526,8 +531,7 @@ final class OBSConstants {
     /**
      * Verify response content type.
      */
-    static final String VERIFY_RESPONSE_CONTENT_TYPE
-        = "fs.obs.verify.response.content.type";
+    static final String VERIFY_RESPONSE_CONTENT_TYPE = "fs.obs.verify.response.content.type";
 
     /**
      * Default value of {@link #VERIFY_RESPONSE_CONTENT_TYPE}.
@@ -537,8 +541,7 @@ final class OBSConstants {
     /**
      * UploadStreamRetryBufferSize.
      */
-    static final String UPLOAD_STREAM_RETRY_SIZE
-        = "fs.obs.upload.stream.retry.buffer.size";
+    static final String UPLOAD_STREAM_RETRY_SIZE = "fs.obs.upload.stream.retry.buffer.size";
 
     /**
      * Default value of {@link #UPLOAD_STREAM_RETRY_SIZE}.
@@ -578,8 +581,7 @@ final class OBSConstants {
     /**
      * Strict host name verification.
      */
-    static final String STRICT_HOSTNAME_VERIFICATION
-        = "fs.obs.strict.hostname.verification";
+    static final String STRICT_HOSTNAME_VERIFICATION = "fs.obs.strict.hostname.verification";
 
     /**
      * Default value of {@link #STRICT_HOSTNAME_VERIFICATION}.
@@ -634,8 +636,7 @@ final class OBSConstants {
     /**
      * Capacity of list work queue.
      */
-    static final String LIST_WORK_QUEUE_CAPACITY
-        = "fs.obs.list.workqueue.capacity";
+    static final String LIST_WORK_QUEUE_CAPACITY = "fs.obs.list.workqueue.capacity";
 
     /**
      * Default value of {@link #LIST_WORK_QUEUE_CAPACITY}.
@@ -660,14 +661,12 @@ final class OBSConstants {
     /**
      * Enable obs content summary or not.
      */
-    static final String OBS_CONTENT_SUMMARY_ENABLE
-        = "fs.obs.content.summary.enable";
+    static final String OBS_CONTENT_SUMMARY_ENABLE = "fs.obs.content.summary.enable";
 
     /**
      * Enable obs client dfs list or not.
      */
-    static final String OBS_CLIENT_DFS_LIST_ENABLE
-        = "fs.obs.client.dfs.list.enable";
+    static final String OBS_CLIENT_DFS_LIST_ENABLE = "fs.obs.client.dfs.list.enable";
 
     /**
      * Default trash : false.
@@ -692,20 +691,17 @@ final class OBSConstants {
     /**
      * Array first block size.
      */
-    static final String FAST_UPLOAD_BUFFER_ARRAY_FIRST_BLOCK_SIZE
-        = "fs.obs.fast.upload.array.first.buffer";
+    static final String FAST_UPLOAD_BUFFER_ARRAY_FIRST_BLOCK_SIZE = "fs.obs.fast.upload.array.first.buffer";
 
     /**
      * The fast upload buffer array first block default size.
      */
-    static final int FAST_UPLOAD_BUFFER_ARRAY_FIRST_BLOCK_SIZE_DEFAULT = 1024
-        * 1024;
+    public static final int FAST_UPLOAD_BUFFER_ARRAY_FIRST_BLOCK_SIZE_DEFAULT = 1024 * 1024;
 
     /**
      * Auth Type Negotiation Enable Switch.
      */
-    static final String SDK_AUTH_TYPE_NEGOTIATION_ENABLE
-        = "fs.obs.authtype.negotiation.enable";
+    static final String SDK_AUTH_TYPE_NEGOTIATION_ENABLE = "fs.obs.authtype.negotiation.enable";
 
     /**
      * Default value of {@link #SDK_AUTH_TYPE_NEGOTIATION_ENABLE}.
@@ -715,8 +711,7 @@ final class OBSConstants {
     /**
      * Okhttp retryOnConnectionFailure switch.
      */
-    static final String SDK_RETRY_ON_CONNECTION_FAILURE_ENABLE
-        = "fs.obs.connection.retry.enable";
+    static final String SDK_RETRY_ON_CONNECTION_FAILURE_ENABLE = "fs.obs.connection.retry.enable";
 
     /**
      * Default value of {@link #SDK_RETRY_ON_CONNECTION_FAILURE_ENABLE}.
@@ -727,8 +722,7 @@ final class OBSConstants {
      * Sdk max retry times on unexpected end of stream. exception, default: -1,
      * don't retry
      */
-    static final String SDK_RETRY_TIMES_ON_UNEXPECTED_END_EXCEPTION
-        = "fs.obs.unexpectedend.retrytime";
+    static final String SDK_RETRY_TIMES_ON_UNEXPECTED_END_EXCEPTION = "fs.obs.unexpectedend.retrytime";
 
     /**
      * Default value of {@link #SDK_RETRY_TIMES_ON_UNEXPECTED_END_EXCEPTION}.
@@ -743,13 +737,30 @@ final class OBSConstants {
     /**
      * Whether to implement getCanonicalServiceName switch.
      */
-    static final String GET_CANONICAL_SERVICE_NAME_ENABLE =
-        "fs.obs.getcanonicalservicename.enable";
+    static final String GET_CANONICAL_SERVICE_NAME_ENABLE = "fs.obs.getcanonicalservicename.enable";
 
     /**
      * Default value of {@link #GET_CANONICAL_SERVICE_NAME_ENABLE}.
      */
     static final boolean DEFAULT_GET_CANONICAL_SERVICE_NAME_ENABLE = false;
+
+    static final String MAX_TIME_IN_MILLISECOND_TO_RETRY = "fs.obs.retry.maxtime";
+
+    /**
+     * Default value of {@link #MAX_TIME_IN_MILLISECOND_TO_RETRY}
+     */
+    static final long DEFAULT_TIME_IN_MILLISECOND_TO_RETRY = 180000;
+
+    /**
+     * File visibility after create interface switch.
+     */
+    static final String FILE_VISIBILITY_AFTER_CREATE_ENABLE =
+        "fs.obs.file.visibility.enable";
+
+    /**
+     * Default value of {@link #FILE_VISIBILITY_AFTER_CREATE_ENABLE}.
+     */
+    static final boolean DEFAULT_FILE_VISIBILITY_AFTER_CREATE_ENABLE = false;
 
     /**
      * Second to millisecond factor.

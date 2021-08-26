@@ -50,8 +50,7 @@ class OBSFileStatus extends FileStatus {
      * @param path             the path
      * @param owner            the owner
      */
-    OBSFileStatus(final Path path, final long modificationTime,
-        final String owner) {
+    OBSFileStatus(final Path path, final long modificationTime, final String owner) {
         super(0, true, 1, 0, modificationTime, path);
         setOwner(owner);
         setGroup(owner);
@@ -65,11 +64,8 @@ class OBSFileStatus extends FileStatus {
      * @param path             the path
      * @param owner            the owner
      */
-    OBSFileStatus(final Path path, final long modificationTime,
-        final long accessTime,
-        final String owner) {
-        super(0, true, 1, 0, modificationTime, accessTime, null, owner, owner,
-            path);
+    OBSFileStatus(final Path path, final long modificationTime, final long accessTime, final String owner) {
+        super(0, true, 1, 0, modificationTime, accessTime, null, owner, owner, path);
     }
 
     /**
@@ -81,9 +77,7 @@ class OBSFileStatus extends FileStatus {
      * @param blockSize        block size
      * @param owner            owner
      */
-    OBSFileStatus(
-        final long length, final long modificationTime, final Path path,
-        final long blockSize,
+    OBSFileStatus(final long length, final long modificationTime, final Path path, final long blockSize,
         final String owner) {
         super(length, false, 1, blockSize, modificationTime, path);
         setOwner(owner);

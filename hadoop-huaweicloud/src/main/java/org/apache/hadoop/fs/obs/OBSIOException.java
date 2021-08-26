@@ -26,7 +26,7 @@ import java.io.IOException;
 /**
  * IOException equivalent to {@link ObsException}.
  */
-class OBSIOException extends IOException {
+public class OBSIOException extends IOException {
     private static final long serialVersionUID = -1582681108285856259L;
 
     /**
@@ -36,8 +36,7 @@ class OBSIOException extends IOException {
 
     OBSIOException(final String operationMsg, final ObsException cause) {
         super(cause);
-        Preconditions.checkArgument(operationMsg != null,
-            "Null 'operation' argument");
+        Preconditions.checkArgument(operationMsg != null, "Null 'operation' argument");
         Preconditions.checkArgument(cause != null, "Null 'cause' argument");
         this.operation = operationMsg;
     }
@@ -48,7 +47,6 @@ class OBSIOException extends IOException {
 
     @Override
     public String getMessage() {
-        return operation + ": " + getCause().getErrorMessage()
-            + ", detailMessage: " + super.getMessage();
+        return operation + ": " + getCause().getErrorMessage() + ", detailMessage: " + super.getMessage();
     }
 }

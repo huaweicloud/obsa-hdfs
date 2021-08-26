@@ -22,4 +22,9 @@
     <Method name="checkPath" />
     <Bug pattern="ES_COMPARING_STRINGS_WITH_EQ" />
   </Match>
+  <Match>
+    <Class name="org.apache.hadoop.fs.obs.input.ReadAheadBuffer" />
+    <Method name="getBuffer" />
+    <Bug pattern="EI_EXPOSE_REP" />
+  </Match>
 </FindBugsFilter>

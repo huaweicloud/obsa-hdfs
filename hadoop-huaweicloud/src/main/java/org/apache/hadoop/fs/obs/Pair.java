@@ -19,9 +19,14 @@
 package org.apache.hadoop.fs.obs;
 
 public class Pair<K, V> {
-    /** Key. */
+    /**
+     * Key.
+     */
     private final K key;
-    /** Value. */
+
+    /**
+     * Value.
+     */
     private final V value;
 
     /**
@@ -90,8 +95,9 @@ public class Pair<K, V> {
             return false;
         } else {
             Pair<?, ?> oP = (Pair<?, ?>) o;
-            return (key == null ? oP.key == null : key.equals(oP.key))
-                && (value == null ? oP.value == null : value.equals(oP.value));
+            return (key == null ? oP.key == null : key.equals(oP.key)) && (value == null
+                ? oP.value == null
+                : value.equals(oP.value));
         }
     }
 

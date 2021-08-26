@@ -1,17 +1,17 @@
 package org.apache.hadoop.fs.obs;
 
+import static org.apache.hadoop.fs.obs.OBSConstants.SSE_KEY;
+import static org.apache.hadoop.fs.obs.OBSConstants.SSE_TYPE;
+
 import com.obs.services.model.SseCHeader;
 import com.obs.services.model.SseKmsHeader;
 
 import org.apache.hadoop.conf.Configuration;
 
-import static org.apache.hadoop.fs.obs.OBSConstants.SSE_KEY;
-import static org.apache.hadoop.fs.obs.OBSConstants.SSE_TYPE;
-
 /**
  * Wrapper for Server-Side Encryption (SSE).
  */
-class SseWrapper {
+public class SseWrapper {
     /**
      * SSE-KMS: Server-Side Encryption with Key Management Service.
      */
@@ -46,7 +46,7 @@ class SseWrapper {
         }
     }
 
-    boolean isSseCEnable() {
+    public boolean isSseCEnable() {
         return sseCHeader != null;
     }
 
@@ -54,7 +54,7 @@ class SseWrapper {
         return sseKmsHeader != null;
     }
 
-    SseCHeader getSseCHeader() {
+    public SseCHeader getSseCHeader() {
         return sseCHeader;
     }
 

@@ -44,18 +44,17 @@ class OBSListing {
     /**
      * A Path filter which accepts all filenames.
      */
-    static final PathFilter ACCEPT_ALL =
-        new PathFilter() {
-            @Override
-            public boolean accept(final Path file) {
-                return true;
-            }
+    static final PathFilter ACCEPT_ALL = new PathFilter() {
+        @Override
+        public boolean accept(final Path file) {
+            return true;
+        }
 
-            @Override
-            public String toString() {
-                return "ACCEPT_ALL";
-            }
-        };
+        @Override
+        public String toString() {
+            return "ACCEPT_ALL";
+        }
+    };
 
     /**
      * Class logger.
@@ -83,14 +82,9 @@ class OBSListing {
      * @return the iterator
      * @throws IOException IO Problems
      */
-    FileStatusListingIterator createFileStatusListingIterator(
-        final Path listPath,
-        final ListObjectsRequest request,
-        final PathFilter filter,
-        final FileStatusAcceptor acceptor)
-        throws IOException {
-        return new FileStatusListingIterator(
-            new ObjectListingIterator(listPath, request), filter, acceptor);
+    FileStatusListingIterator createFileStatusListingIterator(final Path listPath, final ListObjectsRequest request,
+        final PathFilter filter, final FileStatusAcceptor acceptor) throws IOException {
+        return new FileStatusListingIterator(new ObjectListingIterator(listPath, request), filter, acceptor);
     }
 
     /**
@@ -99,8 +93,7 @@ class OBSListing {
      * @param statusIterator an iterator over the remote status entries
      * @return a new remote iterator
      */
-    LocatedFileStatusIterator createLocatedFileStatusIterator(
-        final RemoteIterator<FileStatus> statusIterator) {
+    LocatedFileStatusIterator createLocatedFileStatusIterator(final RemoteIterator<FileStatus> statusIterator) {
         return new LocatedFileStatusIterator(statusIterator);
     }
 
@@ -141,8 +134,7 @@ class OBSListing {
      * calls where the path handed in refers to a file, not a directory: this is
      * the iterator returned.
      */
-    static final class SingleStatusRemoteIterator
-        implements RemoteIterator<LocatedFileStatus> {
+    static final class SingleStatusRemoteIterator implements RemoteIterator<LocatedFileStatus> {
 
         /**
          * The status to return; set to null after the first iteration.
@@ -217,11 +209,8 @@ class OBSListing {
          */
         @Override
         public boolean accept(final Path keyPath, final ObsObject summary) {
-            return !keyPath.equals(qualifiedPath)
-                && !summary.getObjectKey()
-                .endsWith(OBSConstants.OBS_FOLDER_SUFFIX)
-                && !OBSCommonUtils.objectRepresentsDirectory(
-                summary.getObjectKey(),
+            return !keyPath.equals(qualifiedPath) && !summary.getObjectKey().endsWith(OBSConstants.OBS_FOLDER_SUFFIX)
+                && !OBSCommonUtils.objectRepresentsDirectory(summary.getObjectKey(),
                 summary.getMetadata().getContentLength());
         }
 
@@ -269,8 +258,7 @@ class OBSListing {
          */
         @Override
         public boolean accept(final Path keyPath, final ObsObject summary) {
-            return !keyPath.equals(qualifiedPath) && !summary.getObjectKey()
-                .endsWith(OBSConstants.OBS_FOLDER_SUFFIX);
+            return !keyPath.equals(qualifiedPath) && !summary.getObjectKey().endsWith(OBSConstants.OBS_FOLDER_SUFFIX);
         }
 
         /**
@@ -351,10 +339,8 @@ class OBSListing {
          *                           file status.
          * @throws IOException IO Problems
          */
-        FileStatusListingIterator(
-            final ObjectListingIterator listPath, final PathFilter pathFilter,
-            final FileStatusAcceptor fileStatusAcceptor)
-            throws IOException {
+        FileStatusListingIterator(final ObjectListingIterator listPath, final PathFilter pathFilter,
+            final FileStatusAcceptor fileStatusAcceptor) throws IOException {
             this.source = listPath;
             this.filter = pathFilter;
             this.acceptor = fileStatusAcceptor;
@@ -403,8 +389,7 @@ class OBSListing {
                     // declare that the request was successful
                     return true;
                 } else {
-                    LOG.debug(
-                        "All entries in batch were filtered...continuing");
+                    LOG.debug("All entries in batch were filtered...continuing");
                 }
             }
             // if this code is reached, it means that all remaining
@@ -424,26 +409,18 @@ class OBSListing {
             int added = 0;
             int ignored = 0;
             // list to fill in with results. Initial size will be list maximum.
-            List<FileStatus> stats =
-                new ArrayList<>(
-                    objects.getObjects().size() + objects.getCommonPrefixes()
-                        .size());
+            List<FileStatus> stats = new ArrayList<>(objects.getObjects().size() + objects.getCommonPrefixes().size());
             // objects
             for (ObsObject summary : objects.getObjects()) {
                 String key = summary.getObjectKey();
                 Path keyPath = OBSCommonUtils.keyToQualifiedPath(owner, key);
                 if (LOG.isDebugEnabled()) {
-                    LOG.debug("{}: {}", keyPath,
-                        OBSCommonUtils.stringify(summary));
+                    LOG.debug("{}: {}", keyPath, OBSCommonUtils.stringify(summary));
                 }
                 // Skip over keys that are ourselves and old OBS _$folder$ files
-                if (acceptor.accept(keyPath, summary) && filter.accept(
-                    keyPath)) {
-                    FileStatus status =
-                        OBSCommonUtils.createFileStatus(
-                            keyPath, summary,
-                            owner.getDefaultBlockSize(keyPath),
-                            owner.getShortUserName());
+                if (acceptor.accept(keyPath, summary) && filter.accept(keyPath)) {
+                    FileStatus status = OBSCommonUtils.createFileStatus(keyPath, summary,
+                        owner.getDefaultBlockSize(keyPath), owner.getShortUserName());
                     LOG.debug("Adding: {}", status);
                     stats.add(status);
                     added++;
@@ -458,13 +435,11 @@ class OBSListing {
                 String key = prefix.getObjectKey();
                 Path keyPath = OBSCommonUtils.keyToQualifiedPath(owner, key);
                 if (acceptor.accept(keyPath, key) && filter.accept(keyPath)) {
-                    long lastModified =
-                        prefix.getMetadata().getLastModified() == null
-                            ? System.currentTimeMillis()
-                            : OBSCommonUtils.dateToLong(
-                                prefix.getMetadata().getLastModified());
-                    FileStatus status = new OBSFileStatus(keyPath, lastModified,
-                        lastModified, owner.getShortUserName());
+                    long lastModified = prefix.getMetadata().getLastModified() == null
+                        ? System.currentTimeMillis()
+                        : OBSCommonUtils.dateToLong(prefix.getMetadata().getLastModified());
+                    FileStatus status = new OBSFileStatus(keyPath, lastModified, lastModified,
+                        owner.getShortUserName());
                     LOG.debug("Adding directory: {}", status);
                     added++;
                     stats.add(status);
@@ -478,11 +453,7 @@ class OBSListing {
             batchSize = stats.size();
             statusBatchIterator = stats.listIterator();
             boolean hasNext = statusBatchIterator.hasNext();
-            LOG.debug(
-                "Added {} entries; ignored {}; hasNext={}; hasMoreObjects={}",
-                added,
-                ignored,
-                hasNext,
+            LOG.debug("Added {} entries; ignored {}; hasNext={}; hasMoreObjects={}", added, ignored, hasNext,
                 objects.isTruncated());
             return hasNext;
         }
@@ -554,9 +525,7 @@ class OBSListing {
          * @param request initial request to make
          * @throws IOException on any failure to list objects
          */
-        ObjectListingIterator(final Path path,
-            final ListObjectsRequest request)
-            throws IOException {
+        ObjectListingIterator(final Path path, final ListObjectsRequest request) throws IOException {
             this.listPath = path;
             this.maxKeys = owner.getMaxKeys();
             this.objects = OBSCommonUtils.listObjects(owner, request);
@@ -592,19 +561,15 @@ class OBSListing {
                 try {
                     if (!objects.isTruncated()) {
                         // nothing more to request: fail.
-                        throw new NoSuchElementException(
-                            "No more results in listing of " + listPath);
+                        throw new NoSuchElementException("No more results in listing of " + listPath);
                     }
                     // need to request a new set of objects.
-                    LOG.debug("[{}], Requesting next {} objects under {}",
-                        listingCount, maxKeys, listPath);
-                    objects = OBSCommonUtils.continueListObjects(owner,
-                        objects);
+                    LOG.debug("[{}], Requesting next {} objects under {}", listingCount, maxKeys, listPath);
+                    objects = OBSCommonUtils.continueListObjects(owner, objects);
                     listingCount++;
                     LOG.debug("New listing status: {}", this);
                 } catch (ObsException e) {
-                    throw OBSCommonUtils.translateException("listObjects()",
-                        listPath, e);
+                    throw OBSCommonUtils.translateException("listObjects()", listPath, e);
                 }
             }
             return objects;
@@ -612,11 +577,7 @@ class OBSListing {
 
         @Override
         public String toString() {
-            return "Object listing iterator against "
-                + listPath
-                + "; listing count "
-                + listingCount
-                + "; isTruncated="
+            return "Object listing iterator against " + listPath + "; listing count " + listingCount + "; isTruncated="
                 + objects.isTruncated();
         }
 
@@ -626,8 +587,7 @@ class OBSListing {
      * Take a remote iterator over a set of {@link FileStatus} instances and
      * return a remote iterator of {@link LocatedFileStatus} instances.
      */
-    class LocatedFileStatusIterator
-        implements RemoteIterator<LocatedFileStatus> {
+    class LocatedFileStatusIterator implements RemoteIterator<LocatedFileStatus> {
         /**
          * File status.
          */
@@ -639,8 +599,7 @@ class OBSListing {
          * @param statusRemoteIterator an iterator over the remote status
          *                             entries
          */
-        LocatedFileStatusIterator(
-            final RemoteIterator<FileStatus> statusRemoteIterator) {
+        LocatedFileStatusIterator(final RemoteIterator<FileStatus> statusRemoteIterator) {
             this.statusIterator = statusRemoteIterator;
         }
 
@@ -651,8 +610,7 @@ class OBSListing {
 
         @Override
         public LocatedFileStatus next() throws IOException {
-            return OBSCommonUtils.toLocatedFileStatus(owner,
-                statusIterator.next());
+            return OBSCommonUtils.toLocatedFileStatus(owner, statusIterator.next());
         }
     }
 }

@@ -51,7 +51,7 @@ import java.util.concurrent.TimeUnit;
  * /apache/s4/comm/staging/BlockingThreadPoolExecutorService.java)
  */
 @InterfaceAudience.Private
-class SemaphoredDelegatingExecutor extends ForwardingListeningExecutorService {
+public class SemaphoredDelegatingExecutor extends ForwardingListeningExecutorService {
     /**
      * Number of permits queued.
      */
@@ -74,9 +74,7 @@ class SemaphoredDelegatingExecutor extends ForwardingListeningExecutorService {
      * @param permitSize            number of permits into the queue permitted
      * @param fair                  should the semaphore be "fair"
      */
-    SemaphoredDelegatingExecutor(
-        final ListeningExecutorService listExecutorDelegatee,
-        final int permitSize,
+    public SemaphoredDelegatingExecutor(final ListeningExecutorService listExecutorDelegatee, final int permitSize,
         final boolean fair) {
         this.permitCount = permitSize;
         queueingPermits = new Semaphore(permitSize, fair);
@@ -90,30 +88,26 @@ class SemaphoredDelegatingExecutor extends ForwardingListeningExecutorService {
 
     @NotNull
     @Override
-    public <T> List<Future<T>> invokeAll(
-        @NotNull final Collection<? extends Callable<T>> tasks) {
+    public <T> List<Future<T>> invokeAll(@NotNull final Collection<? extends Callable<T>> tasks) {
         throw new RuntimeException("Not implemented");
     }
 
     @NotNull
     @Override
-    public <T> List<Future<T>> invokeAll(
-        @NotNull final Collection<? extends Callable<T>> tasks,
-        final long timeout, @NotNull final TimeUnit unit) {
+    public <T> List<Future<T>> invokeAll(@NotNull final Collection<? extends Callable<T>> tasks, final long timeout,
+        @NotNull final TimeUnit unit) {
         throw new RuntimeException("Not implemented");
     }
 
     @NotNull
     @Override
-    public <T> T invokeAny(
-        @NotNull final Collection<? extends Callable<T>> tasks) {
+    public <T> T invokeAny(@NotNull final Collection<? extends Callable<T>> tasks) {
         throw new RuntimeException("Not implemented");
     }
 
     @Override
-    public <T> T invokeAny(
-        @NotNull final Collection<? extends Callable<T>> tasks,
-        final long timeout, @NotNull final TimeUnit unit) {
+    public <T> T invokeAny(@NotNull final Collection<? extends Callable<T>> tasks, final long timeout,
+        @NotNull final TimeUnit unit) {
         throw new RuntimeException("Not implemented");
     }
 
@@ -131,8 +125,7 @@ class SemaphoredDelegatingExecutor extends ForwardingListeningExecutorService {
 
     @NotNull
     @Override
-    public <T> ListenableFuture<T> submit(@NotNull final Runnable task,
-        @NotNull final T result) {
+    public <T> ListenableFuture<T> submit(@NotNull final Runnable task, @NotNull final T result) {
         try {
             queueingPermits.acquire();
         } catch (InterruptedException e) {
@@ -194,8 +187,7 @@ class SemaphoredDelegatingExecutor extends ForwardingListeningExecutorService {
 
     @Override
     public String toString() {
-        return "SemaphoredDelegatingExecutor{" + "permitCount="
-            + getPermitCount() + ", available="
+        return "SemaphoredDelegatingExecutor{" + "permitCount=" + getPermitCount() + ", available="
             + getAvailablePermits() + ", waiting=" + getWaitingCount() + '}';
     }
 

@@ -32,8 +32,7 @@ class DefaultMetricsConsumer implements BasicMetricsConsumer {
     /**
      * Class logger.
      */
-    private static final Logger LOG = LoggerFactory.getLogger(
-        DefaultMetricsConsumer.class);
+    private static final Logger LOG = LoggerFactory.getLogger(DefaultMetricsConsumer.class);
 
     /**
      * URI of the FileSystem instance.
@@ -48,14 +47,12 @@ class DefaultMetricsConsumer implements BasicMetricsConsumer {
     /**
      * Default metrics consumer that prints debug logs.
      *
-     * @param uriName       URI of the owner FileSystem
+     * @param uriName URI of the owner FileSystem
      */
-    DefaultMetricsConsumer(final URI uriName,
-        final Configuration configuration) {
+    DefaultMetricsConsumer(final URI uriName, final Configuration configuration) {
         this.uri = uriName;
         this.conf = configuration;
-        LOG.debug("DefaultMetricsConsumer with URI [{}] and "
-            + "Configuration[{}]", this.uri, this.conf);
+        LOG.debug("DefaultMetricsConsumer with URI [{}] and " + "Configuration[{}]", this.uri, this.conf);
     }
 
     /**
@@ -67,10 +64,8 @@ class DefaultMetricsConsumer implements BasicMetricsConsumer {
     @Override
     public boolean putMetrics(MetricRecord metricRecord) {
         if (LOG.isDebugEnabled()) {
-            LOG.debug("[Metrics]: url[{}], opName [{}], costTime[{}], "
-                    + "opResult[{}]", this.uri,
-                metricRecord.getOpName(),metricRecord.getCostTime(),
-                metricRecord.isSuccess());
+            LOG.debug("[Metrics]: url[{}], opName [{}], costTime[{}], " + "opResult[{}]", this.uri,
+                metricRecord.getOpName(), metricRecord.getCostTime(), metricRecord.isSuccess());
         }
         return true;
     }

@@ -67,8 +67,7 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
     /**
      * Class logger.
      */
-    private static final Logger LOG = LoggerFactory.getLogger(
-        OBSBlockOutputStream.class);
+    private static final Logger LOG = LoggerFactory.getLogger(OBSBlockOutputStream.class);
 
     /**
      * Owner FileSystem.
@@ -162,13 +161,8 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
      * @param isAppendable if append is supported
      * @throws IOException on any problem
      */
-    OBSBlockOutputStream(
-        final OBSFileSystem owner,
-        final String obsObjectKey,
-        final long objLen,
-        final ExecutorService execService,
-        final boolean isAppendable)
-        throws IOException {
+    OBSBlockOutputStream(final OBSFileSystem owner, final String obsObjectKey, final long objLen,
+        final ExecutorService execService, final boolean isAppendable) throws IOException {
         this.appendAble = new AtomicBoolean(isAppendable);
         this.fs = owner;
         this.key = obsObjectKey;
@@ -177,19 +171,14 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
         this.blockFactory = owner.getBlockFactory();
         this.blockSize = (int) owner.getPartSize();
         this.writeOperationHelper = owner.getWriteHelper();
-        Preconditions.checkArgument(
-            owner.getPartSize() >= OBSConstants.MULTIPART_MIN_SIZE,
+        Preconditions.checkArgument(owner.getPartSize() >= OBSConstants.MULTIPART_MIN_SIZE,
             "Block size is too small: %d", owner.getPartSize());
-        this.executorService = MoreExecutors.listeningDecorator(
-            execService);
+        this.executorService = MoreExecutors.listeningDecorator(execService);
         this.multiPartUpload = null;
         // create that first block. This guarantees that an open + close
         // sequence writes a 0-byte entry.
         createBlockIfNeeded();
-        LOG.debug(
-            "Initialized OBSBlockOutputStream for {}" + " output to {}",
-            owner.getWriteHelper(),
-            activeBlock);
+        LOG.debug("Initialized OBSBlockOutputStream for {}" + " output to {}", owner.getWriteHelper(), activeBlock);
     }
 
     /**
@@ -198,15 +187,12 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
      * @return the active block; null if there isn't one.
      * @throws IOException on any failure to create
      */
-    private synchronized OBSDataBlocks.DataBlock createBlockIfNeeded()
-        throws IOException {
+    private synchronized OBSDataBlocks.DataBlock createBlockIfNeeded() throws IOException {
         if (activeBlock == null) {
             blockCount++;
             if (blockCount >= OBSConstants.MAX_MULTIPART_COUNT) {
-                LOG.debug(
-                    "Number of partitions in stream exceeds limit for OBS: "
-                        + OBSConstants.MAX_MULTIPART_COUNT
-                        + " write may fail.");
+                LOG.debug("Number of partitions in stream exceeds limit for OBS: " + OBSConstants.MAX_MULTIPART_COUNT
+                    + " write may fail.");
             }
             activeBlock = blockFactory.create(blockCount, this.blockSize);
         }
@@ -258,8 +244,7 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
      */
     private void checkStreamOpen() throws IOException {
         if (closed) {
-            throw new IOException(
-                uri + ": " + FSExceptionMessages.STREAM_IS_CLOSED);
+            throw new IOException(uri + ": " + FSExceptionMessages.STREAM_IS_CLOSED);
         }
     }
 
@@ -307,16 +292,13 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
      * @throws IOException on any problem
      */
     @Override
-    public synchronized void write(@NotNull final byte[] source,
-        final int offset, final int len)
-        throws IOException {
+    public synchronized void write(@NotNull final byte[] source, final int offset, final int len) throws IOException {
         fs.checkOpen();
         checkStreamOpen();
         long startTime = System.currentTimeMillis();
         long endTime;
         if (hasException.get()) {
-            String closeWarning = String.format(
-                "write has error. bs : pre upload obs[%s] has error.", key);
+            String closeWarning = String.format("write has error. bs : pre upload obs[%s] has error.", key);
             LOG.warn(closeWarning);
             throw new IOException(closeWarning);
         }
@@ -332,45 +314,35 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
             innerWrite(source, offset, len, written, remainingCapacity);
             endTime = System.currentTimeMillis();
             if (fs.getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record =
-                    new BasicMetricsConsumer.MetricRecord(
-                        null, BasicMetricsConsumer.MetricRecord.WRITE, true,
-                        endTime - startTime);
+                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
+                    BasicMetricsConsumer.MetricRecord.WRITE, true, endTime - startTime);
                 OBSCommonUtils.setMetricsInfo(fs, record);
             }
         } catch (IOException e) {
             endTime = System.currentTimeMillis();
             if (fs.getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record =
-                    new BasicMetricsConsumer.MetricRecord(
-                        null, BasicMetricsConsumer.MetricRecord.WRITE, false,
-                        endTime - startTime);
+                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
+                    BasicMetricsConsumer.MetricRecord.WRITE, false, endTime - startTime);
                 OBSCommonUtils.setMetricsInfo(fs, record);
             }
-            LOG.error(
-                "Write data for key {} of bucket {} error, error message {}",
-                key, fs.getBucket(),
+            LOG.error("Write data for key {} of bucket {} error, error message {}", key, fs.getBucket(),
                 e.getMessage());
             throw e;
         }
     }
 
-    private synchronized void innerWrite(final byte[] source, final int offset,
-        final int len,
-        final int written, final int remainingCapacity)
-        throws IOException {
+    private synchronized void innerWrite(final byte[] source, final int offset, final int len, final int written,
+        final int remainingCapacity) throws IOException {
 
         if (written < len) {
             // not everything was written —the block has run out
             // of capacity
             // Trigger an upload then process the remainder.
-            LOG.debug(
-                "writing more data than block has capacity -triggering upload");
+            LOG.debug("writing more data than block has capacity -triggering upload");
             if (appendAble.get()) {
                 // to write a buffer then append to obs
                 LOG.debug("[Append] open stream and single write size {} "
-                        + "greater than buffer size {}, append buffer to obs.",
-                    len, blockSize);
+                    + "greater than buffer size {}, append buffer to obs.", len, blockSize);
                 flushCurrentBlock();
             } else {
                 // block output stream logic, multi-part upload
@@ -385,8 +357,7 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
                 if (appendAble.get()) {
                     // to write a buffer then append to obs
                     LOG.debug("[Append] open stream and already write size "
-                            + "equal to buffer size {}, append buffer to obs.",
-                        blockSize);
+                        + "equal to buffer size {}, append buffer to obs.", blockSize);
                     flushCurrentBlock();
                 } else {
                     // block output stream logic, multi-part upload
@@ -414,8 +385,7 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
             multiPartUpload.uploadBlockAsync(getActiveBlock());
         } catch (IOException e) {
             hasException.set(true);
-            LOG.error("Upload current block on ({}/{}) failed.", fs.getBucket(),
-                key, e);
+            LOG.error("Upload current block on ({}/{}) failed.", fs.getBucket(), key, e);
             throw e;
         } finally {
             // set the block to null, so the next write will create a new block.
@@ -443,16 +413,13 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
         }
 
         if (hasException.get()) {
-            String closeWarning = String.format(
-                "closed has error. bs : pre write obs[%s] has error.", key);
+            String closeWarning = String.format("closed has error. bs : pre write obs[%s] has error.", key);
             LOG.warn(closeWarning);
             endTime = System.currentTimeMillis();
             if (fs.getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record =
-                    new BasicMetricsConsumer.MetricRecord(
-                        BasicMetricsConsumer.MetricRecord.OUTPUT,
-                        BasicMetricsConsumer.MetricRecord.CLOSE, false,
-                        endTime - startTime);
+                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
+                    BasicMetricsConsumer.MetricRecord.OUTPUT, BasicMetricsConsumer.MetricRecord.CLOSE, false,
+                    endTime - startTime);
                 OBSCommonUtils.setMetricsInfo(fs, record);
             }
             throw new IOException(closeWarning);
@@ -472,11 +439,9 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
         fs.removeFileBeingWritten(key);
         endTime = System.currentTimeMillis();
         if (fs.getMetricSwitch()) {
-            BasicMetricsConsumer.MetricRecord record =
-                new BasicMetricsConsumer.MetricRecord(
-                    BasicMetricsConsumer.MetricRecord.OUTPUT,
-                    BasicMetricsConsumer.MetricRecord.CLOSE, true,
-                    endTime - startTime);
+            BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
+                BasicMetricsConsumer.MetricRecord.OUTPUT, BasicMetricsConsumer.MetricRecord.CLOSE, true,
+                endTime - startTime);
             OBSCommonUtils.setMetricsInfo(fs, record);
         }
         closed = true;
@@ -488,8 +453,7 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
      * @throws IOException any problem in append or put object
      */
     private synchronized void putObjectIfNeedAppend() throws IOException {
-        if (appendAble.get() && fs.exists(
-            OBSCommonUtils.keyToQualifiedPath(fs, key))) {
+        if (appendAble.get() && fs.exists(OBSCommonUtils.keyToQualifiedPath(fs, key))) {
             appendFsFile();
         } else {
             putObject();
@@ -506,11 +470,9 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
         final OBSDataBlocks.DataBlock block = getActiveBlock();
         WriteFileRequest writeFileReq;
         if (block instanceof OBSDataBlocks.DiskBlock) {
-            writeFileReq = OBSCommonUtils.newAppendFileRequest(fs, key,
-                objectLen, (File) block.startUpload());
+            writeFileReq = OBSCommonUtils.newAppendFileRequest(fs, key, objectLen, (File) block.startUpload());
         } else {
-            writeFileReq = OBSCommonUtils.newAppendFileRequest(fs, key,
-                objectLen, (InputStream) block.startUpload());
+            writeFileReq = OBSCommonUtils.newAppendFileRequest(fs, key, objectLen, (InputStream) block.startUpload());
         }
         OBSCommonUtils.appendFile(fs, writeFileReq);
         objectLen += block.dataSize();
@@ -524,21 +486,17 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
      * @throws IOException any problem.
      */
     private synchronized void putObject() throws IOException {
-        LOG.debug("Executing regular upload for {}",
-            writeOperationHelper.toString(key));
+        LOG.debug("Executing regular upload for {}", writeOperationHelper.toString(key));
 
         final OBSDataBlocks.DataBlock block = getActiveBlock();
         clearActiveBlock();
         final int size = block.dataSize();
         final PutObjectRequest putObjectRequest;
         if (block instanceof OBSDataBlocks.DiskBlock) {
-            putObjectRequest = writeOperationHelper.newPutRequest(key,
-                (File) block.startUpload());
+            putObjectRequest = writeOperationHelper.newPutRequest(key, (File) block.startUpload());
 
         } else {
-            putObjectRequest =
-                writeOperationHelper.newPutRequest(key,
-                    (InputStream) block.startUpload(), size);
+            putObjectRequest = writeOperationHelper.newPutRequest(key, (InputStream) block.startUpload(), size);
 
         }
         putObjectRequest.setAcl(fs.getCannedACL());
@@ -581,10 +539,8 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
 
         long endTime = System.currentTimeMillis();
         if (fs.getMetricSwitch()) {
-            BasicMetricsConsumer.MetricRecord record =
-                new BasicMetricsConsumer.MetricRecord(
-                    null, BasicMetricsConsumer.MetricRecord.HFLUSH, true,
-                    endTime - startTime);
+            BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
+                BasicMetricsConsumer.MetricRecord.HFLUSH, true, endTime - startTime);
             OBSCommonUtils.setMetricsInfo(fs, record);
         }
     }
@@ -599,9 +555,7 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
 
         checkStreamOpen();
         if (hasException.get()) {
-            String flushWarning = String.format(
-                "flushOrSync has error. bs : pre write obs[%s] has error.",
-                key);
+            String flushWarning = String.format("flushOrSync has error. bs : pre write obs[%s] has error.", key);
             LOG.warn(flushWarning);
             throw new IOException(flushWarning);
         }
@@ -632,9 +586,7 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
      * @param hasBlock jungle if has block
      * @throws IOException io exception
      */
-    private synchronized void uploadWriteBlocks(
-        final OBSDataBlocks.DataBlock block,
-        final boolean hasBlock)
+    private synchronized void uploadWriteBlocks(final OBSDataBlocks.DataBlock block, final boolean hasBlock)
         throws IOException {
         if (multiPartUpload == null) {
             if (hasBlock) {
@@ -651,8 +603,7 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
                 uploadCurrentBlock();
             }
             // wait for the partial uploads to finish
-            final List<Pair<PartEtag, Integer>> partETags
-                = multiPartUpload.waitForAllPartUploads();
+            final List<Pair<PartEtag, Integer>> partETags = multiPartUpload.waitForAllPartUploads();
             List<PartEtag> listPartETags = new ArrayList<>();
             int countSize = 0;
             for (Pair<PartEtag, Integer> pair : partETags) {
@@ -670,17 +621,14 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
     private synchronized void completeCurrentBlock() throws IOException {
         OBSDataBlocks.DataBlock block = getActiveBlock();
         boolean hasBlock = hasActiveBlock();
-        LOG.debug("{}: complete block #{}: current block= {}", this, blockCount,
-            hasBlock ? block : "(none)");
+        LOG.debug("{}: complete block #{}: current block= {}", this, blockCount, hasBlock ? block : "(none)");
         try {
             uploadWriteBlocks(block, hasBlock);
         } catch (IOException ioe) {
-            LOG.error("Upload data to obs error. io exception : {}",
-                ioe.getMessage());
+            LOG.error("Upload data to obs error. io exception : {}", ioe.getMessage());
             throw ioe;
         } catch (Exception e) {
-            LOG.error("Upload data to obs error. other exception : {}",
-                e.getMessage());
+            LOG.error("Upload data to obs error. other exception : {}", e.getMessage());
             throw e;
         } finally {
             OBSCommonUtils.closeAll(block);
@@ -691,19 +639,15 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
     private synchronized void flushCurrentBlock() throws IOException {
         OBSDataBlocks.DataBlock block = getActiveBlock();
         boolean hasBlock = hasActiveBlock();
-        LOG.debug(
-            "{}: complete block #{}: current block= {}", this, blockCount,
-            hasBlock ? block : "(none)");
+        LOG.debug("{}: complete block #{}: current block= {}", this, blockCount, hasBlock ? block : "(none)");
         try {
             uploadWriteBlocks(block, hasBlock);
         } catch (IOException ioe) {
-            LOG.error("hflush data to obs error. io exception : {}",
-                ioe.getMessage());
+            LOG.error("hflush data to obs error. io exception : {}", ioe.getMessage());
             hasException.set(true);
             throw ioe;
         } catch (Exception e) {
-            LOG.error("hflush data to obs error. other exception : {}",
-                e.getMessage());
+            LOG.error("hflush data to obs error. other exception : {}", e.getMessage());
             hasException.set(true);
             throw e;
         } finally {
@@ -720,10 +664,8 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
         flushOrSync();
         long endTime = System.currentTimeMillis();
         if (fs.getMetricSwitch()) {
-            BasicMetricsConsumer.MetricRecord record =
-                new BasicMetricsConsumer.MetricRecord(
-                    null, BasicMetricsConsumer.MetricRecord.HFLUSH, true,
-                    endTime - startTime);
+            BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
+                BasicMetricsConsumer.MetricRecord.HFLUSH, true, endTime - startTime);
             OBSCommonUtils.setMetricsInfo(fs, record);
         }
     }
@@ -740,18 +682,13 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
         /**
          * List for async part upload future.
          */
-        private final List<ListenableFuture<Pair<PartEtag, Integer>>>
-            partETagsFutures;
+        private final List<ListenableFuture<Pair<PartEtag, Integer>>> partETagsFutures;
 
         MultiPartUpload() throws IOException {
             this.uploadId = writeOperationHelper.initiateMultiPartUpload(key);
             this.partETagsFutures = new ArrayList<>(2);
-            LOG.debug(
-                "Initiated multi-part upload for {} with , the key is {}"
-                    + "id '{}'",
-                writeOperationHelper,
-                uploadId,
-                key);
+            LOG.debug("Initiated multi-part upload for {} with , the key is {}" + "id '{}'", writeOperationHelper,
+                uploadId, key);
         }
 
         /**
@@ -760,64 +697,46 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
          * @param block block to upload
          * @throws IOException upload failure
          */
-        private void uploadBlockAsync(final OBSDataBlocks.DataBlock block)
-            throws IOException {
+        private void uploadBlockAsync(final OBSDataBlocks.DataBlock block) throws IOException {
             LOG.debug("Queueing upload of {}", block);
 
             final int size = block.dataSize();
             final int currentPartNumber = partETagsFutures.size() + 1;
             final UploadPartRequest request;
             if (block instanceof OBSDataBlocks.DiskBlock) {
-                request = writeOperationHelper.newUploadPartRequest(
-                    key,
-                    uploadId,
-                    currentPartNumber,
-                    size,
+                request = writeOperationHelper.newUploadPartRequest(key, uploadId, currentPartNumber, size,
                     (File) block.startUpload());
             } else {
-                request = writeOperationHelper.newUploadPartRequest(
-                    key,
-                    uploadId,
-                    currentPartNumber,
-                    size,
+                request = writeOperationHelper.newUploadPartRequest(key, uploadId, currentPartNumber, size,
                     (InputStream) block.startUpload());
 
             }
-            ListenableFuture<Pair<PartEtag, Integer>> partETagFuture
-                = executorService.submit(() -> {
-                    // this is the queued upload operation
-                    LOG.debug("Uploading part {} for id '{}'",
-                        currentPartNumber, uploadId);
-                    // do the upload
-                    PartEtag partETag = null;
-                    try {
-                        if (mockUploadPartError) {
-                            throw new ObsException("mock upload part error");
-                        }
-                        UploadPartResult uploadPartResult
-                            = OBSCommonUtils.uploadPart(fs, request);
-                        partETag =
-                            new PartEtag(uploadPartResult.getEtag(),
-                                uploadPartResult.getPartNumber());
-                        if (LOG.isDebugEnabled()) {
-                            LOG.debug("Completed upload of {} to part {}",
-                                block, partETag);
-                        }
-                    } catch (ObsException e) {
-                        // catch all exception
-                        hasException.set(true);
-                        IOException ioException =
-                            OBSCommonUtils.translateException("UploadPart", key,
-                                e);
-                        LOG.error("UploadPart failed (ObsException). {}",
-                            ioException.getMessage());
-                        throw ioException;
-                    } finally {
-                        // close the stream and block
-                        OBSCommonUtils.closeAll(block);
+            ListenableFuture<Pair<PartEtag, Integer>> partETagFuture = executorService.submit(() -> {
+                // this is the queued upload operation
+                LOG.debug("Uploading part {} for id '{}'", currentPartNumber, uploadId);
+                // do the upload
+                PartEtag partETag = null;
+                try {
+                    if (mockUploadPartError) {
+                        throw new ObsException("mock upload part error");
                     }
-                    return new Pair<PartEtag, Integer>(partETag, size);
-                });
+                    UploadPartResult uploadPartResult = OBSCommonUtils.uploadPart(fs, request);
+                    partETag = new PartEtag(uploadPartResult.getEtag(), uploadPartResult.getPartNumber());
+                    if (LOG.isDebugEnabled()) {
+                        LOG.debug("Completed upload of {} to part {}", block, partETag);
+                    }
+                } catch (ObsException e) {
+                    // catch all exception
+                    hasException.set(true);
+                    IOException ioException = OBSCommonUtils.translateException("UploadPart", key, e);
+                    LOG.error("UploadPart failed (ObsException). {}", ioException.getMessage());
+                    throw ioException;
+                } finally {
+                    // close the stream and block
+                    OBSCommonUtils.closeAll(block);
+                }
+                return new Pair<PartEtag, Integer>(partETag, size);
+            });
             partETagsFutures.add(partETagFuture);
         }
 
@@ -827,10 +746,8 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
          * @return list of results
          * @throws IOException IO Problems
          */
-        private List<Pair<PartEtag, Integer>> waitForAllPartUploads()
-            throws IOException {
-            LOG.debug("Waiting for {} uploads to complete",
-                partETagsFutures.size());
+        private List<Pair<PartEtag, Integer>> waitForAllPartUploads() throws IOException {
+            LOG.debug("Waiting for {} uploads to complete", partETagsFutures.size());
             try {
                 return Futures.allAsList(partETagsFutures).get();
             } catch (InterruptedException ie) {
@@ -841,9 +758,7 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
                 }
                 // abort multipartupload
                 this.abort();
-                throw new IOException(
-                    "Interrupted multi-part upload with id '" + uploadId
-                        + "' to " + key);
+                throw new IOException("Interrupted multi-part upload with id '" + uploadId + "' to " + key);
             } catch (ExecutionException ee) {
                 // there is no way of recovering so abort
                 // cancel all partUploads
@@ -854,9 +769,8 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
                 }
                 // abort multipartupload
                 this.abort();
-                throw OBSCommonUtils.extractException(
-                    "Multi-part upload with id '" + uploadId + "' to " + key,
-                    key, ee);
+                throw OBSCommonUtils.extractException("Multi-part upload with id '" + uploadId + "' to " + key, key,
+                    ee);
             }
         }
 
@@ -868,16 +782,13 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
          * @return result for completing multipart upload
          * @throws IOException on any problem
          */
-        private CompleteMultipartUploadResult complete(
-            final List<PartEtag> partETags) throws IOException {
+        private CompleteMultipartUploadResult complete(final List<PartEtag> partETags) throws IOException {
             String operation = String.format(
-                "Completing multi-part upload for key '%s',"
-                    + " id '%s' with %s partitions ",
-                key, uploadId, partETags.size());
+                "Completing multi-part upload for key '%s'," + " id '%s' with %s partitions ", key, uploadId,
+                partETags.size());
             try {
                 LOG.debug(operation);
-                return writeOperationHelper.completeMultipartUpload(key,
-                    uploadId, partETags);
+                return writeOperationHelper.completeMultipartUpload(key, uploadId, partETags);
             } catch (ObsException e) {
                 throw OBSCommonUtils.translateException(operation, key, e);
             }
@@ -889,18 +800,13 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
          * process.
          */
         void abort() {
-            String operation =
-                String.format(
-                    "Aborting multi-part upload for '%s', id '%s",
-                    writeOperationHelper, uploadId);
+            String operation = String.format("Aborting multi-part upload for '%s', id '%s", writeOperationHelper,
+                uploadId);
             try {
                 LOG.debug(operation);
                 writeOperationHelper.abortMultipartUpload(key, uploadId);
             } catch (ObsException e) {
-                LOG.warn(
-                    "Unable to abort multipart upload, you may need to purge  "
-                        + "uploaded parts",
-                    e);
+                LOG.warn("Unable to abort multipart upload, you may need to purge  " + "uploaded parts", e);
             }
         }
     }
