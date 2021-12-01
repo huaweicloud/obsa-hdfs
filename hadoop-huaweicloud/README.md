@@ -6,7 +6,7 @@
 ### hadoop-obs 源码编译指南
 示例：mvn clean install -Pdist -Dhadoop.plat.version=3.1.1 -Dhadoop.version=3.1.1 -Dmaven.test.skip=true
 
-- Pdist：将hadoop-obs依赖的obs java sdk以及okttp等依赖进行了shade，编译部署安装使用
+- Pdist：将hadoop-obs依赖的obs java sdk以及okttp等依赖进行了shade，方便部署安装使用
 - Dhadoop.version：定义了依赖的hadoop版本，目前仅支持依赖hadoop-2.8.x及以上版本
 - Dhadoop.plat.version：定义了jar的命名规范，和-Dhadoop.version保持一致即可
 - jar包命名规范：hadoop-huaweicloud-x.x.x-hw-y.jar包含义：前三位x.x.x为依赖的hadoop版本；最后一位y为hadoop-obs版本，例如：hadoop-huaweicloud-3.1.1-hw-45.jar，3.1.1是配套的hadoop版本，45是hadoop-obs的版本
