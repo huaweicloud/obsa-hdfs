@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<configuration>
+    <property>
+        <name>ranger.plugin.obs.service.name</name>
+        <value>obs</value>
+    </property>
+    <!-- 拉取的ranger policy的本地缓存地址,确保ranger-obs-service对该目录有读写权限 -->
+    <property>
+        <name>ranger.plugin.obs.policy.cache.dir</name>
+        <value></value>
+    </property>
+    <property>
+        <name>ranger.plugin.obs.policy.pollIntervalMs</name>
+        <value>30000</value>
+    </property>
+    <property>
+        <name>ranger.plugin.obs.policy.rest.client.connection.timeoutMs</name>
+        <value>120000</value>
+    </property>
+    <property>
+        <name>ranger.plugin.obs.policy.rest.client.read.timeoutMs</name>
+        <value>30000</value>
+    </property>
+    <property>
+        <name>ranger.plugin.obs.policy.rest.supports.policy.deltas</name>
+        <value>false</value>
+    </property>
+    <!-- ranger admin的restful http地址 -->
+    <property>
+        <name>ranger.plugin.obs.policy.rest.url</name>
+        <value></value>
+    </property>
+    <property>
+        <name>ranger.plugin.obs.policy.source.impl</name>
+        <value>org.apache.ranger.admin.client.RangerAdminRESTClient</value>
+    </property>
+</configuration>

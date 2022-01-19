@@ -1,0 +1,48 @@
+syntax = "proto2";
+
+option java_package = "org.apache.ranger.obs.protocol.proto";
+option java_outer_classname = "RangerObsServiceProtocolProtos";
+option java_generic_services = true;
+option java_generate_equals_and_hash = true;
+
+package ranger.obs.service;
+
+import "Security.proto";
+
+enum AccessTypeProto {
+    LIST = 1;
+    WRITE = 2;
+    READ = 3;
+    DELETE = 4;
+}
+
+message PermissionRequestProto {
+    required AccessTypeProto accessType = 2;
+    optional string bucketName = 3;
+    optional string objectKey = 4;
+}
+
+message PermissionResponseProto {
+    required bool allowed = 1;
+}
+
+message GetSTSRequestProto {
+    optional string bucketName = 1;
+    optional string region = 2;
+    optional string allowPrefix = 3;
+}
+
+message GetSTSResponseProto {
+    required string ak = 1;
+    required string sk = 2;
+    optional string token = 3;
+    optional uint64 expiryTime = 4;
+}
+
+service RangerObsServiceProtocol {
+    rpc getDelegationToken (hadoop.common.GetDelegationTokenRequestProto) returns (hadoop.common.GetDelegationTokenResponseProto);
+    rpc renewDelegationToken (hadoop.common.RenewDelegationTokenRequestProto) returns (hadoop.common.RenewDelegationTokenResponseProto);
+    rpc cancelDelegationToken (hadoop.common.CancelDelegationTokenRequestProto) returns (hadoop.common.CancelDelegationTokenResponseProto);
+    rpc checkPermission (PermissionRequestProto) returns (PermissionResponseProto);
+    rpc getSTS (GetSTSRequestProto) returns (GetSTSResponseProto);
+}
