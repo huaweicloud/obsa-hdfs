@@ -46,9 +46,14 @@ import org.apache.hadoop.fs.RemoteIterator;
 import org.apache.hadoop.fs.obs.input.InputPolicyFactory;
 import org.apache.hadoop.fs.obs.input.InputPolicys;
 import org.apache.hadoop.fs.obs.input.OBSInputStream;
+import org.apache.hadoop.fs.obs.security.AccessType;
+import org.apache.hadoop.fs.obs.security.AuthorizeProvider;
+import org.apache.hadoop.fs.obs.security.DelegationTokenCapability;
+import org.apache.hadoop.fs.obs.security.OBSAuthorizationException;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.security.AccessControlException;
 import org.apache.hadoop.security.UserGroupInformation;
+import org.apache.hadoop.security.token.Token;
 import org.apache.hadoop.util.Progressable;
 import org.apache.hadoop.util.ReflectionUtils;
 import org.slf4j.Logger;
@@ -270,6 +275,8 @@ public class OBSFileSystem extends FileSystem {
      */
     private boolean enableCanonicalServiceName = false;
 
+    AuthorizeProvider authorizer;
+
     /**
      * A map from file names to {@link FSDataOutputStream} objects that are
      * currently being written by this client. Note that a file can only be
@@ -446,11 +453,81 @@ public class OBSFileSystem extends FileSystem {
             enableFileVisibilityAfterCreate =
                 conf.getBoolean(OBSConstants.FILE_VISIBILITY_AFTER_CREATE_ENABLE,
                     OBSConstants.DEFAULT_FILE_VISIBILITY_AFTER_CREATE_ENABLE);
+            enableCanonicalServiceName = conf.getBoolean(OBSConstants.GET_CANONICAL_SERVICE_NAME_ENABLE,
+                OBSConstants.DEFAULT_GET_CANONICAL_SERVICE_NAME_ENABLE);
+
+            this.authorizer = initAuthorizeProvider(conf);
         } catch (ObsException e) {
             throw OBSCommonUtils.translateException("initializing ", new Path(name), e);
         }
 
         LOG.info("Finish initializing filesystem instance for uri: {}", uri);
+    }
+
+    private AuthorizeProvider initAuthorizeProvider(Configuration conf) throws IOException {
+        AuthorizeProvider authorizer = null;
+        Class<?> authClassName = conf.getClass(OBSConstants.AUTHORIZER_PROVIDER, null);
+        if (authClassName != null) {
+            try {
+                LOG.info("authorize provider is " + authClassName.getName());
+                authorizer = (AuthorizeProvider)authClassName.newInstance();
+                authorizer.init(conf);
+            } catch (Exception e) {
+                LOG.error(String.format("init %s failed", OBSConstants.AUTHORIZER_PROVIDER), e);
+                throw new IOException(String.format("init %s failed", OBSConstants.AUTHORIZER_PROVIDER), e);
+            }
+        }
+
+        return authorizer;
+    }
+
+    private void checkPermission(Path path, AccessType accessType) throws IOException {
+        if (authorizer == null) {
+            LOG.debug("authorize provider is not initialized. No authorization will be performed.");
+        } else {
+            boolean failFallback = this.getConf().getBoolean(OBSConstants.AUTHORIZE_FAIL_FALLBACK,
+                OBSConstants.DEFAULT_AUTHORIZE_FAIL_FALLBACK);
+            boolean exceptionFallback = this.getConf().getBoolean(OBSConstants.AUTHORIZE_EXCEPTION_FALLBACK,
+                OBSConstants.DEFAULT_AUTHORIZE_EXCEPTION_FALLBACK);
+
+            String key = OBSCommonUtils.pathToKey(this, path);
+            Boolean result = true;
+            UserGroupInformation currentUser = UserGroupInformation.getCurrentUser();
+            try {
+                long st = System.currentTimeMillis();
+                result = authorizer.isAuthorized(this.bucket, key, accessType);
+                long et = System.currentTimeMillis();
+                if (LOG.isDebugEnabled()){
+                    LOG.debug("authorizing:[user: {}], [action: {}], "
+                            + "[bucket: {}], [path: {}], [result: {}], [cost: {}]",
+                        currentUser,
+                        accessType.toString(),
+                        this.bucket,
+                        path.toString(),
+                        result, et - st);
+                }
+            } catch (Exception e) {
+                if (exceptionFallback) {
+                    LOG.warn("authorize exception fallback:[user: {}], [action: {}], [bucket: {}], [key: {}]",
+                        currentUser, accessType.toString(),this.bucket,key);
+                } else {
+                    throw e;
+                }
+            }
+            if (!result) {
+                if (failFallback) {
+                    LOG.warn("authorize fail fallback:[user: {}], [action: {}], [bucket: {}], [key: {}]",
+                        currentUser, accessType.toString(),this.bucket,key);
+                } else {
+                    throw new OBSAuthorizationException(String.format("permission denied:[user: %s], [action: %s], "
+                            + "[bucket: %s], [key: %s]",
+                        currentUser,
+                        accessType.toString(),
+                        this.bucket,
+                        key));
+                }
+            }
+        }
     }
 
     private void initThreadPools(final Configuration conf) {
@@ -716,11 +793,7 @@ public class OBSFileSystem extends FileSystem {
             }
             throw new FileNotFoundException("Can't open " + f + " because it is a directory");
         }
-        // FSDataInputStream fsDataInputStream = new FSDataInputStream(
-        //     new OBSInputStream(bucket, OBSCommonUtils.pathToKey(this, f),
-        //         fileStatus.getLen(),
-        //         obs, statistics, readAheadRange, this));
-
+        checkPermission(f, AccessType.READ);
         FSInputStream fsInputStream = inputPolicyFactory.create(this, bucket, OBSCommonUtils.pathToKey(this, f),
             fileStatus.getLen(), statistics, boundedMultipartUploadThreadPool);
         FSDataInputStream fsDataInputStream = new FSDataInputStream(fsInputStream);
@@ -806,6 +879,7 @@ public class OBSFileSystem extends FileSystem {
             exist = false;
         }
 
+        checkPermission(f,AccessType.WRITE);
         FSDataOutputStream outputStream = new FSDataOutputStream(new OBSBlockOutputStream(this, key, 0,
             new SemaphoredDelegatingExecutor(boundedMultipartUploadThreadPool, blockOutputActiveBlocks, true), false),
             null);
@@ -923,6 +997,7 @@ public class OBSFileSystem extends FileSystem {
                 exist = false;
             }
 
+            checkPermission(f,AccessType.WRITE);
             outputStream = new FSDataOutputStream(new OBSBlockOutputStream(this, key, 0,
                 new SemaphoredDelegatingExecutor(boundedMultipartUploadThreadPool, blockOutputActiveBlocks, true),
                 true), null);
@@ -1055,6 +1130,7 @@ public class OBSFileSystem extends FileSystem {
             throw new IOException("Cannot append " + f + " that is being written.");
         }
 
+        checkPermission(f,AccessType.WRITE);
         FSDataOutputStream outputStream = new FSDataOutputStream(new OBSBlockOutputStream(this, key, objectLen,
             new SemaphoredDelegatingExecutor(boundedMultipartUploadThreadPool, blockOutputActiveBlocks, true), true),
             null,objectLen);
@@ -1096,7 +1172,6 @@ public class OBSFileSystem extends FileSystem {
         if (!enablePosix) {
             super.truncate(f, newLength);
         }
-
         if (newLength < 0) {
             throw new IOException(new HadoopIllegalArgumentException(
                 "Cannot truncate " + f + " to a negative file size: " + newLength + "."));
@@ -1131,6 +1206,7 @@ public class OBSFileSystem extends FileSystem {
                     + newLength + "."));
         }
 
+        checkPermission(f, AccessType.WRITE);
         OBSPosixBucketUtils.innerFsTruncateWithRetry(this, f, newLength);
 
         return true;
@@ -1170,6 +1246,8 @@ public class OBSFileSystem extends FileSystem {
         LOG.debug("Rename path {} to {} start", src, dst);
         try {
             if (enablePosix) {
+                checkPermission(src, AccessType.WRITE);
+                checkPermission(dst,AccessType.WRITE);
                 boolean success = OBSPosixBucketUtils.renameBasedOnPosix(this, src, dst);
                 endTime = System.currentTimeMillis();
                 if (getMetricSwitch()) {
@@ -1179,6 +1257,8 @@ public class OBSFileSystem extends FileSystem {
                 }
                 return success;
             } else {
+                checkPermission(src, AccessType.WRITE);
+                checkPermission(dst, AccessType.WRITE);
                 boolean success = OBSObjectBucketUtils.renameBasedOnObject(this, src, dst);
                 endTime = System.currentTimeMillis();
                 if (getMetricSwitch()) {
@@ -1307,6 +1387,7 @@ public class OBSFileSystem extends FileSystem {
             LOG.debug("delete: path {} - recursive {}", status.getPath(), recursive);
 
             if (enablePosix) {
+                checkPermission(f,AccessType.WRITE);
                 boolean success = OBSPosixBucketUtils.fsDelete(this, status, recursive);
                 endTime = System.currentTimeMillis();
                 if (getMetricSwitch()) {
@@ -1316,7 +1397,7 @@ public class OBSFileSystem extends FileSystem {
                 }
                 return success;
             }
-
+            checkPermission(f,AccessType.WRITE);
             boolean success = OBSObjectBucketUtils.objectDelete(this, status, recursive);
             endTime = System.currentTimeMillis();
             if (getMetricSwitch()) {
@@ -1383,6 +1464,7 @@ public class OBSFileSystem extends FileSystem {
     @Override
     public FileStatus[] listStatus(final Path f) throws FileNotFoundException, IOException {
         checkOpen();
+        checkPermission(f,AccessType.READ);
         long startTime = System.currentTimeMillis();
         long threadId = Thread.currentThread().getId();
         long endTime;
@@ -1423,6 +1505,7 @@ public class OBSFileSystem extends FileSystem {
      */
     public FileStatus[] listStatus(final Path f, final boolean recursive) throws FileNotFoundException, IOException {
         checkOpen();
+        checkPermission(f,AccessType.READ);
         long startTime = System.currentTimeMillis();
         long threadId = Thread.currentThread().getId();
         long endTime;
@@ -1508,6 +1591,7 @@ public class OBSFileSystem extends FileSystem {
     public boolean mkdirs(final Path path, final FsPermission permission)
         throws IOException, FileAlreadyExistsException {
         checkOpen();
+        checkPermission(path,AccessType.WRITE);
         long startTime = System.currentTimeMillis();
         long endTime;
         try {
@@ -1727,17 +1811,28 @@ public class OBSFileSystem extends FileSystem {
         LOG.info("Finish closing filesystem instance for uri: {}", uri);
     }
 
-    /**
-     * Override {@code getCanonicalServiceName} and return {@code null} since
-     * delegation token is not supported.
-     */
     @Override
     public String getCanonicalServiceName() {
-        // Does not support Token, only enable for HBase BulkLoad
-        if (enableCanonicalServiceName) {
+        if (authorizer != null && authorizer instanceof DelegationTokenCapability) {
+            LOG.debug("getting CanonicalServiceName");
+            return ((DelegationTokenCapability)authorizer).getCanonicalServiceName();
+        } else if (enableCanonicalServiceName) {
+            // Does not support Token, only enable for HBase BulkLoad
             return getScheme() + "://" + bucket;
         }
         return null;
+    }
+
+    @Override
+    public Token<?> getDelegationToken(String renewer) throws IOException {
+        if (authorizer != null && authorizer instanceof DelegationTokenCapability) {
+            long st = System.currentTimeMillis();
+            Token<?> delegationToken = ((DelegationTokenCapability) authorizer).getDelegationToken(renewer);
+            long et = System.currentTimeMillis();
+            LOG.debug("getDelegationToken:[renewer: {}], [cost: {}]", renewer, et - st);
+            return delegationToken;
+        }
+        return super.getDelegationToken(renewer);
     }
 
     /**
@@ -1853,6 +1948,7 @@ public class OBSFileSystem extends FileSystem {
     public RemoteIterator<LocatedFileStatus> listFiles(final Path f, final boolean recursive)
         throws FileNotFoundException, IOException {
         checkOpen();
+        checkPermission(f,AccessType.READ);
         long startTime = System.currentTimeMillis();
         long endTime;
         RemoteIterator<LocatedFileStatus> locatedFileStatus;
@@ -1873,7 +1969,6 @@ public class OBSFileSystem extends FileSystem {
                 }
                 throw new AccessControlException(e);
             }
-
             if (fileStatus.isFile()) {
                 locatedFileStatus = new OBSListing.SingleStatusRemoteIterator(
                     OBSCommonUtils.toLocatedFileStatus(this, fileStatus));
@@ -1951,6 +2046,7 @@ public class OBSFileSystem extends FileSystem {
     public RemoteIterator<LocatedFileStatus> listLocatedStatus(final Path f, final PathFilter filter)
         throws FileNotFoundException, IOException {
         checkOpen();
+        checkPermission(f,AccessType.READ);
         Path path = OBSCommonUtils.qualify(this, f);
         LOG.debug("listLocatedStatus({}, {}", path, filter);
         long startTime = System.currentTimeMillis();

@@ -215,6 +215,7 @@ class DefaultOBSClientFactory extends Configured implements OBSClientFactory {
             throw new IOException("From option " + OBSConstants.OBS_CREDENTIALS_PROVIDER + ' ' + c, c);
         }
 
+        LOG.info("create ObsClient using credentialsProvider: {}", credentialsProviderClass.getName());
         String sessionToken = credentialsProvider.getSessionToken();
         String ak = credentialsProvider.getOBSAccessKeyId();
         String sk = credentialsProvider.getOBSSecretKey();
@@ -241,6 +242,7 @@ class DefaultOBSClientFactory extends Configured implements OBSClientFactory {
         obsConf.setEndPoint(endPoint);
 
         if (!StringUtils.isEmpty(ak) || !StringUtils.isEmpty(sk)) {
+            LOG.info("create ObsClient using aksk from configuration");
             obsClient = new ObsClient(ak, sk, token, obsConf);
             return obsClient;
         }
@@ -255,10 +257,12 @@ class DefaultOBSClientFactory extends Configured implements OBSClientFactory {
         }
 
         if (securityProviderClass == null) {
+            LOG.info("create ObsClient when securityProviderClass is null");
             obsClient = new ObsClient(ak, sk, token, obsConf);
             return obsClient;
         }
 
+        LOG.info("create ObsClient using securityProvider {}", securityProviderClass.getName());
         IObsCredentialsProvider securityProvider;
         try {
             Optional<Constructor> cons = tryGetConstructor(securityProviderClass,

@@ -149,6 +149,8 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
      */
     private boolean mockUploadPartError = false;
 
+    private String hflushPolicy = OBSConstants.OUTPUT_STREAM_HFLUSH_POLICY_SYNC;
+
     /**
      * An OBS output stream which uploads partitions in a separate pool of
      * threads; different {@link OBSDataBlocks.BlockFactory} instances can
@@ -175,6 +177,8 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
             "Block size is too small: %d", owner.getPartSize());
         this.executorService = MoreExecutors.listeningDecorator(execService);
         this.multiPartUpload = null;
+        this.hflushPolicy = owner.getConf()
+            .get(OBSConstants.OUTPUT_STREAM_HFLUSH_POLICY, OBSConstants.OUTPUT_STREAM_HFLUSH_POLICY_SYNC);
         // create that first block. This guarantees that an open + close
         // sequence writes a 0-byte entry.
         createBlockIfNeeded();
@@ -505,6 +509,7 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
             // the putObject call automatically closes the input
             // stream afterwards.
             writeOperationHelper.putObject(putObjectRequest);
+            objectLen += size;
         } finally {
             OBSCommonUtils.closeAll(block);
         }
@@ -534,8 +539,22 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
         fs.checkOpen();
         checkStreamOpen();
         long startTime = System.currentTimeMillis();
-        // hflush hsyn same
-        flushOrSync();
+        switch (this.hflushPolicy) {
+            case OBSConstants.OUTPUT_STREAM_HFLUSH_POLICY_SYNC:
+                // hflush hsyn same
+                flushOrSync();
+                break;
+            case OBSConstants.OUTPUT_STREAM_HFLUSH_POLICY_FLUSH:
+                flush();
+                break;
+
+            case OBSConstants.OUTPUT_STREAM_HFLUSH_POLICY_EMPTY:
+                // do nothing
+                break;
+
+            default:
+                throw new IOException(String.format("unsupported downgrade policy '%s'", this.hflushPolicy));
+        }
 
         long endTime = System.currentTimeMillis();
         if (fs.getMetricSwitch()) {
@@ -661,7 +680,22 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
         fs.checkOpen();
         checkStreamOpen();
         long startTime = System.currentTimeMillis();
-        flushOrSync();
+        switch (this.hflushPolicy) {
+            case OBSConstants.OUTPUT_STREAM_HFLUSH_POLICY_SYNC:
+                // hflush hsyn same
+                flushOrSync();
+                break;
+            case OBSConstants.OUTPUT_STREAM_HFLUSH_POLICY_FLUSH:
+                sync();
+                break;
+
+            case OBSConstants.OUTPUT_STREAM_HFLUSH_POLICY_EMPTY:
+                // do nothing
+                break;
+
+            default:
+                throw new IOException(String.format("unsupported downgrade policy '%s'", this.hflushPolicy));
+        }
         long endTime = System.currentTimeMillis();
         if (fs.getMetricSwitch()) {
             BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,

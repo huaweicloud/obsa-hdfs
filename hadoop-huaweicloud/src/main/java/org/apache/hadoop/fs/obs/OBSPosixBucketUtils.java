@@ -500,7 +500,7 @@ final class OBSPosixBucketUtils {
         final NewFolderRequest newFolderRequest = new NewFolderRequest(owner.getBucket(), newObjectName);
         newFolderRequest.setAcl(owner.getCannedACL());
         long len = newFolderRequest.getObjectKey().length();
-
+        IOException lastException = null;
         long delayMs;
         int retryTime = 0;
         long startTime = System.currentTimeMillis();
@@ -518,6 +518,7 @@ final class OBSPosixBucketUtils {
                 if (!(ioException instanceof OBSIOException)) {
                     throw ioException;
                 }
+                lastException = ioException;
 
                 delayMs = OBSCommonUtils.getSleepTimeInMs(retryTime);
                 retryTime++;
@@ -531,6 +532,7 @@ final class OBSPosixBucketUtils {
                 }
             }
         }
+        throw lastException;
     }
 
     // Used to get the status of a file or folder in a file-gateway bucket.

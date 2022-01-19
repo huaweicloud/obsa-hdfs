@@ -167,7 +167,7 @@ public final class OBSConstants {
     /**
      * Default value of {@link #ESTABLISH_TIMEOUT}.
      */
-    static final int DEFAULT_ESTABLISH_TIMEOUT = 120000;
+    static final int DEFAULT_ESTABLISH_TIMEOUT = 5000;
 
     /**
      * Seconds until we give up on a connection to obs.
@@ -762,6 +762,14 @@ public final class OBSConstants {
      */
     static final boolean DEFAULT_FILE_VISIBILITY_AFTER_CREATE_ENABLE = false;
 
+    public static final String AUTHORIZER_PROVIDER = "fs.obs.authorize.provider";
+
+    public static final String  AUTHORIZE_FAIL_FALLBACK= "fs.obs.authorize.fail.fallback";
+    public static final boolean DEFAULT_AUTHORIZE_FAIL_FALLBACK = false;
+
+    public static final String  AUTHORIZE_EXCEPTION_FALLBACK= "fs.obs.authorize.exception.fallback";
+    public static final boolean DEFAULT_AUTHORIZE_EXCEPTION_FALLBACK = true;
+
     /**
      * Second to millisecond factor.
      */
@@ -777,6 +785,18 @@ public final class OBSConstants {
     static final String METRICS_SWITCH = "fs.obs.metrics.switch";
 
     static final boolean DEFAULT_METRICS_SWITCH = false;
+
+    /**
+     * OBSBlockOutputStream implement the Syncable interface with its full semantic,
+     * but this will lead to low performance in some scenario, for detail see [BUG2021092400077].
+     */
+    static final String OUTPUT_STREAM_HFLUSH_POLICY = "fs.obs.outputstream.hflush.policy";
+
+    static final String OUTPUT_STREAM_HFLUSH_POLICY_SYNC = "sync"; // use original policy
+
+    static final String OUTPUT_STREAM_HFLUSH_POLICY_FLUSH = "flush"; // downgrade hflush/hsync to the buffer's flush
+
+    static final String OUTPUT_STREAM_HFLUSH_POLICY_EMPTY = "empty"; // downgrade hflush/hsync to empty func, which means calling hflush/hsync will do nothing
 
     private OBSConstants() {
     }

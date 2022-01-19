@@ -406,6 +406,7 @@ final class OBSObjectBucketUtils {
         long delayMs;
         int retryTime = 0;
         long startTime = System.currentTimeMillis();
+        IOException lastException = null;
         while (System.currentTimeMillis() - startTime <= OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY) {
             InputStream im = null;
             try {
@@ -422,7 +423,7 @@ final class OBSObjectBucketUtils {
                 owner.getSchemeStatistics().incrementBytesWritten(putObjectRequest.getMetadata().getContentLength());
                 return;
             } catch (ObsException e) {
-                LOG.debug("Delete path failed with [{}], " + "retry time [{}] - request id [{}] - "
+                LOG.debug("create empty obj failed with [{}], " + "retry time [{}] - request id [{}] - "
                         + "error code [{}] - error message [{}]", e.getResponseCode(), retryTime, e.getErrorRequestId(),
                     e.getErrorCode(), e.getErrorMessage());
 
@@ -430,6 +431,8 @@ final class OBSObjectBucketUtils {
                 if (!(ioException instanceof OBSIOException)) {
                     throw ioException;
                 }
+
+                lastException = ioException;
 
                 delayMs = OBSCommonUtils.getSleepTimeInMs(retryTime);
                 retryTime++;
@@ -447,6 +450,7 @@ final class OBSObjectBucketUtils {
                 }
             }
         }
+        throw lastException;
     }
 
     /**
@@ -487,6 +491,7 @@ final class OBSObjectBucketUtils {
                 }
             }
         }
+        innerCopyFile(owner, srcKey, dstKey, size);
     }
 
     private static void innerCopyFile(final OBSFileSystem owner, final String srcKey, final String dstKey,
