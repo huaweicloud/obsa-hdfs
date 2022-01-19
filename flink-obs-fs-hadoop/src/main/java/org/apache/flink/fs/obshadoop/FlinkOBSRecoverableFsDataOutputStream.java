@@ -123,9 +123,8 @@ public class FlinkOBSRecoverableFsDataOutputStream extends RecoverableFsDataOutp
             FileStatus srcStatus = null;
             try {
                 srcStatus = fs.getFileStatus(src);
-            }
-            catch (FileNotFoundException e) {
-            }catch (IOException e) {
+            } catch (FileNotFoundException e) {
+            } catch (IOException e) {
                 throw new IOException(
                     "Committing during recovery failed: Could not access status of source file.");
             }
