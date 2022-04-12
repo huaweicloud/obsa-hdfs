@@ -27,7 +27,7 @@
 
   <properties>
     <file.encoding>UTF-8</file.encoding>
-    <hadoop.version>2.8.3.0101-hw-ei-14</hadoop.version>
+    <hadoop.version>3.2.3</hadoop.version>
     <esdk.version>3.21.8.2</esdk.version>
     <hadoop.plat.version>2.8.3</hadoop.plat.version>
     <obsa.version>46</obsa.version>
