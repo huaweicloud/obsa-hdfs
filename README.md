@@ -5,9 +5,10 @@
 ----------------------------------------
 
 ### flink-obs 源码编译指南
-示例：mvn clean install  -Dmaven.test.skip=true -Dhadoop.version=3.1.1
+示例：mvn clean install  -Dmaven.test.skip=true -Dhadoop.version=3.1.1 -Dhadoop.huaweicloud.version=3.1.1-hw-46
 -  flink-obs依赖hadoop-obs模块：请先将hadoop-obs模块安装到本地
 - -Dhadoop.version：定义依赖的hadoop版本
+- -Dhadoop.huaweicloud.version：定义了hadoop-obs模块的版本
 - jar包命名规范：flink-obs-fs-hadoop-x.x.x-hw-y.jar版本规则：x.x.x为对应的flink版本，y为flink-ob版本，例如：flink-obs-fs-hadoop-1.12.1-hw-45.jar，1.12.1是对应的flink版本，45是flink-obs的版本
 -  flink-obs的打包方式：flink为了解决jar包冲突
    1. plugin加载机制: 从1.9开始引入plugin加载机制，采用独立的类加载器加载插件，所以flink-obs没有采用relocate shade方式进行打包，所以请务必将flink-obs jar包放入${FLINK_HOME}/plugins/obs-fs-hadoop目录下
