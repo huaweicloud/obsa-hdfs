@@ -129,7 +129,7 @@ hadoop_conf=/home/modules/hadoop-3.1.1/etc/hadoop
 
 (4) Install：ranger-2.0.0-admin/setup.sh
 
-(5) Start：ranger-admin
+(5) Start：ranger-admin start
 
 Related logs are stored in ranger-2.0.0-admin/ews/logs
 
@@ -184,7 +184,7 @@ hadoop_conf=/home/modules/hadoop-3.1.1/etc/hadoop
 </property>
 ```
 
-(5) Start：ranger-usersync
+(5) Start：ranger-usersync start
 
 Log files are stored in ranger-2.0.0-usersync/logs
 
@@ -265,8 +265,8 @@ log4j.properties: log configuration file
 （3）ranger-obs-security.xml
 | Parameter | Mandatory | Default value | Description |
 |  ----  | ----  | ----  | ----  |
-| ranger.plugin.obs.policy.rest.url | Yes | Empty | URL of rangerAdmin |
-| ranger.plugin.obs.policy.cache.dir | Yes | Empty | | The policy obtained from the rangerAdmin service is stored in the local cache directory. A cache directory is automatically created. |
+| **ranger.plugin.obs.policy.rest.url** | Yes | Empty | URL of rangerAdmin |
+| **ranger.plugin.obs.policy.cache.dir** | Yes | Empty | | The policy obtained from the rangerAdmin service is stored in the local cache directory. A cache directory is automatically created. |
 | ranger.plugin.obs.policy.source.impl | No | org.apache.ranger.admin.client.RangerAdminRESTClient | |
 | ranger.plugin.obs.policy.pollIntervalMs | No | Policy Pull Interval | 30000 |Policy pull interval |
 | ranger.plugin.obs.policy.rest.client.connection.timeoutMs | No | 120000 | Access to rangerAdmin connection timed out |
@@ -301,8 +301,8 @@ Access http://{ranger-obs-service}:26900/status: service status information
 
 | Parameter | Mandatory | Default value | Description |
 |  ----  | ----  | ----  | ----  |
-| fs.obs.authorize.provider | Yes | Empty | Authentication class used by hadoop-obs. **Set this parameter to org.apache.hadoop.fs.obs.security.RangerAuthorizeProvider** |
-| ranger.obs.service.rpc.address | Yes | null | ranger-obs-service service address with a port number. When ranger.obs.client.impl is set to LoadBalanceRangerObsClientImpl, you can enter multiple addresses and separate them with semicolons (;). |
+| **fs.obs.authorize.provider** | Yes | Empty | Authentication class used by hadoop-obs. **Set this parameter to org.apache.hadoop.fs.obs.security.RangerAuthorizeProvider** |
+| **ranger.obs.service.rpc.address** | Yes | null | ranger-obs-service service address with a port number. When ranger.obs.client.impl is set to LoadBalanceRangerObsClientImpl, you can enter multiple addresses and separate them with semicolons (;). |
 | fs.obs.authorize.fail.fallback | No | false | Indicates whether to fallback when authentication fails. |
 | fs.obs.authorize.exception.fallback | No | true | Indicates whether to fallback when an authentication exception occurs. |
 | ranger.obs.client.impl | No | org.apache.ranger.obs.client.LoadBalanceRangerObsClientImpl | org.apache.ranger.obs.client.LoadBalanceRangerObsClientImpl Clients with load balancing capabilities and org.apache.ranger.obs.client.RangerObsClientImpl need to depend on clients of external load balancing services (such as Nginx). |
