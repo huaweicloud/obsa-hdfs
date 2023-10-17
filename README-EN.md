@@ -10,7 +10,7 @@
 ### Source code compilation
 1.Go to the ranger-obs directory.
 
-2.mvn clean package -Dmaven.test.skip=true -Dhadoop.version=3.1.1 -Dranger.version=2.0.0 -Dhadoop.huaweicloud.version=3.1.1-hw-46.1
+2.mvn clean package -Dmaven.test.skip=true -Dhadoop.version=3.1.1 -Dranger.version=2.0.0 -Dhadoop.huaweicloud.version=3.1.1-hw-46
 
 -Dhadoop.version: defines the dependent Hadoop version.
 
@@ -18,7 +18,9 @@
 
 -Dhadoop.huaweicloud.version: defines the version of the hadoop-obs component.
 
-Appendix: How Do I Obtain Hadoop-obs and Other Components from the Maven Repository?
+Note: 
+- Hadoop-obs supports ranger-obs only in 46 series versions. Other versions do not support ranger-obs.
+- How Do I Obtain Hadoop-obs and Other Components from the Maven Repository?
 
 Add the following Maven repository address to ranger-obs/pom.xml:
 ```
@@ -46,13 +48,13 @@ ranger-obs/ranger-obs-service/target/ranger-obs-service-0.1.0.tar.gz
 
 ### Installation and Deployment Guide
 - The non-security cluster is used as an example. It supports security clusters, and Kerberos-related configurations are required for security clusters.
-- Hadoop-3.1.1, hadoop-huaweicloud-3.1.1-hw-46.1.jar, and ranger2.0.0 are used as examples. Other versions have not been tested. You need to perform compatibility tests by yourself.
+- Hadoop-3.1.1, hadoop-huaweicloud-3.1.1-hw-46.jar, and ranger2.0.0 are used as examples. Other versions have not been tested. You need to perform compatibility tests by yourself.
 
 #### I.Hadoop and hadoop-obs Installation and Configuration
 1. Download and install Hadoop-3.1.1 to /home/modules/hadoop-3.1.1/
 
 2. Download hadoop-obs
-https://repo.huaweicloud.com/repository/maven/huaweicloudsdk/com/huaweicloud/obs/hadoop-huaweicloud/3.1.1-hw-46.1/
+https://repo.huaweicloud.com/repository/maven/huaweicloudsdk/com/huaweicloud/hadoop-huaweicloud/3.1.1-hw-46/
 
 3. Install and configure hadoop-obs
 https://support.huaweicloud.com/bestpractice-obs/obs_05_1507.html
@@ -293,7 +295,7 @@ Access http://{ranger-obs-service}:26900/status: service status information
 
 #### V.ranger-obs-client Installation
 
-1. Install ranger-obs-client-0.1.0.jar in the same location as hadoop-huaweicloud-3.1.1-hw-46.1.jar.
+1. Install ranger-obs-client-0.1.0.jar in the same location as hadoop-huaweicloud-3.1.1-hw-46.jar.
 
 2. Configure the core-site.xml file of the Hadoop
 
