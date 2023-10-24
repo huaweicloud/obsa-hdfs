@@ -65,7 +65,7 @@ https://support.huaweicloud.com/bestpractice-obs/obs_05_1507.html
 
 (1) Download: http://archive.apache.org/dist/ranger/2.0.0/apache-ranger-2.0.0.tar.gz
 
-(2) Compile: mvn -Pall -DskipTests clean compile package install
+(2) Compile: mvn -DskipTests clean compile package assembly:assembly install
 
 Obtain the related tar.gz file from the target directory after compilation.
 
@@ -251,6 +251,7 @@ log4j.properties: log configuration file
 | ranger.obs.service.authorize.enable | No | True | Indicates whether to enable permission interception. If this parameter is set to FALSE, all permission check is bypassed. |
 | ranger.obs.service.sts.enable | No | false | Indicates whether to enable the STS service. This function is an experimental function. |
 | ranger.obs.service.sts.provider | No | Empty | AK/SK or temporary AK/SK provider. The provider needs to implement the org.apache.ranger.obs.security.sts.STSProvider interface. |
+| hadoop.security.authentication | Yes (kerberos) | None | Enabled or Not  kerberos|
 | ranger.obs.service.kerberos.principal | Yes (kerberos) | None | Security cluster configuration item, running user of the ranger-obs-service service |
 | ranger.obs.service.kerberos.keytab | Yes (kerberos) | None | Security cluster configuration item, keytab corresponding to the running user of the ranger-obs-service service |
 | ranger.obs.service.dt.service.name | No | 0.0. 0.0:26901 | Security cluster configuration item, service name in DelegationToken. The ranger-obs-service service can be scaled out. Therefore, this configuration item must be the same for all ranger-obs-services. |
