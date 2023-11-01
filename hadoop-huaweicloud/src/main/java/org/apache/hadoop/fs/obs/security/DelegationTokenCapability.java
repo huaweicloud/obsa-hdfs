@@ -9,6 +9,7 @@ import java.io.IOException;
  *
  * @since 2021-09-15
  */
+@Deprecated
 public interface DelegationTokenCapability {
     String getCanonicalServiceName();
 

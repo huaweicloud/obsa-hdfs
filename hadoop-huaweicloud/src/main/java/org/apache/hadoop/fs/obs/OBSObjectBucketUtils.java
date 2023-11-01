@@ -19,7 +19,6 @@ import com.obs.services.model.ObsObject;
 import com.obs.services.model.PartEtag;
 import com.obs.services.model.PutObjectRequest;
 
-import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.fs.ContentSummary;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.ParentNotDirectoryException;
@@ -34,16 +33,17 @@ import java.io.InputStream;
 import java.io.InterruptedIOException;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Comparator;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.Locale;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 
 /**
- * Object bucket specific utils for {@link OBSFileSystem}.
+ * Object bucket specific utils
  */
 final class OBSObjectBucketUtils {
     /**
@@ -62,7 +62,7 @@ final class OBSObjectBucketUtils {
      * @param src   path to be renamed
      * @param dst   new path after rename
      * @return boolean
-     * @throws RenameFailedException if some criteria for a state changing
+     * @throws OBSRenameFailedException if some criteria for a state changing
      *                               rename was not met. This means work didn't
      *                               happen; it's not something which is
      *                               reported upstream to the FileSystem APIs,
@@ -73,7 +73,7 @@ final class OBSObjectBucketUtils {
      * @throws ObsException          on failures inside the OBS SDK
      */
     static boolean renameBasedOnObject(final OBSFileSystem owner, final Path src, final Path dst)
-        throws RenameFailedException, FileNotFoundException, IOException, ObsException {
+        throws OBSRenameFailedException, FileNotFoundException, IOException, ObsException {
         String srcKey = OBSCommonUtils.pathToKey(owner, src);
         String dstKey = OBSCommonUtils.pathToKey(owner, dst);
 
@@ -84,11 +84,11 @@ final class OBSObjectBucketUtils {
 
         // get the source file status; this raises a FNFE if there is no source
         // file.
-        FileStatus srcStatus = OBSCommonUtils.innerGetFileStatusWithRetry(owner, src);
+        FileStatus srcStatus = OBSCommonUtils.getFileStatusWithRetry(owner, src);
 
         FileStatus dstStatus;
         try {
-            dstStatus = OBSCommonUtils.innerGetFileStatusWithRetry(owner, dst);
+            dstStatus = OBSCommonUtils.getFileStatusWithRetry(owner, dst);
             // if there is no destination entry, an exception is raised.
             // hence this code sequence can assume that there is something
             // at the end of the path; the only detail being what it is and
@@ -98,12 +98,12 @@ final class OBSObjectBucketUtils {
                 String filename = srcKey.substring(OBSCommonUtils.pathToKey(owner, src.getParent()).length() + 1);
                 newDstKey = newDstKey + filename;
                 dstKey = newDstKey;
-                dstStatus = OBSCommonUtils.innerGetFileStatusWithRetry(owner, OBSCommonUtils.keyToPath(dstKey));
+                dstStatus = OBSCommonUtils.getFileStatusWithRetry(owner, OBSCommonUtils.keyToPath(dstKey));
                 if (dstStatus.isDirectory()) {
-                    throw new RenameFailedException(src, dst, "new destination is an existed directory").withExitCode(
+                    throw new OBSRenameFailedException(src, dst, "new destination is an existed directory").withExitCode(
                         false);
                 } else {
-                    throw new RenameFailedException(src, dst, "new destination is an existed file").withExitCode(false);
+                    throw new OBSRenameFailedException(src, dst, "new destination is an existed file").withExitCode(false);
                 }
             } else {
 
@@ -111,7 +111,7 @@ final class OBSObjectBucketUtils {
                     LOG.warn("rename: src and dest refer to the same file or" + " directory: {}", dst);
                     return true;
                 } else {
-                    throw new RenameFailedException(src, dst, "destination is an existed file").withExitCode(false);
+                    throw new OBSRenameFailedException(src, dst, "destination is an existed file").withExitCode(false);
                 }
             }
         } catch (FileNotFoundException e) {
@@ -153,13 +153,13 @@ final class OBSObjectBucketUtils {
         Path parent = dst.getParent();
         if (!OBSCommonUtils.pathToKey(owner, parent).isEmpty()) {
             try {
-                FileStatus dstParentStatus = OBSCommonUtils.innerGetFileStatusWithRetry(owner, dst.getParent());
+                FileStatus dstParentStatus = OBSCommonUtils.getFileStatusWithRetry(owner, dst.getParent());
                 if (!dstParentStatus.isDirectory()) {
                     throw new ParentNotDirectoryException(
                         "destination parent [" + dst.getParent() + "] is not a directory");
                 }
             } catch (FileNotFoundException e2) {
-                throw new RenameFailedException(src, dst, "destination has no parent ");
+                throw new OBSRenameFailedException(src, dst, "destination has no parent ");
             }
         }
     }
@@ -403,11 +403,7 @@ final class OBSObjectBucketUtils {
 
     // Used to create an empty file that represents an empty directory
     static void createEmptyObject(final OBSFileSystem owner, final String objectName) throws IOException {
-        long delayMs;
-        int retryTime = 0;
-        long startTime = System.currentTimeMillis();
-        IOException lastException = null;
-        while (System.currentTimeMillis() - startTime <= OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY) {
+        OBSCommonUtils.getOBSInvoker().retryByMaxTime(OBSOperateAction.createEmptyObject, objectName, () -> {
             InputStream im = null;
             try {
                 im = new InputStream() {
@@ -421,36 +417,13 @@ final class OBSObjectBucketUtils {
                 owner.getObsClient().putObject(putObjectRequest);
                 owner.getSchemeStatistics().incrementWriteOps(1);
                 owner.getSchemeStatistics().incrementBytesWritten(putObjectRequest.getMetadata().getContentLength());
-                return;
-            } catch (ObsException e) {
-                LOG.debug("create empty obj failed with [{}], " + "retry time [{}] - request id [{}] - "
-                        + "error code [{}] - error message [{}]", e.getResponseCode(), retryTime, e.getErrorRequestId(),
-                    e.getErrorCode(), e.getErrorMessage());
-
-                IOException ioException = OBSCommonUtils.translateException("innerCreateEmptyObject", objectName, e);
-                if (!(ioException instanceof OBSIOException)) {
-                    throw ioException;
-                }
-
-                lastException = ioException;
-
-                delayMs = OBSCommonUtils.getSleepTimeInMs(retryTime);
-                retryTime++;
-                if (System.currentTimeMillis() - startTime + delayMs
-                    < OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY) {
-                    try {
-                        Thread.sleep(delayMs);
-                    } catch (InterruptedException ie) {
-                        throw ioException;
-                    }
-                }
             } finally {
                 if (im != null) {
                     im.close();
                 }
             }
-        }
-        throw lastException;
+            return null;
+        }, true);
     }
 
     /**
@@ -464,34 +437,12 @@ final class OBSObjectBucketUtils {
      * @throws IOException            Other IO problems
      */
     static void copyFile(final OBSFileSystem owner, final String srcKey, final String dstKey, final long size)
-        throws IOException, InterruptedIOException {
-        long delayMs;
-        int retryTime = 0;
-        long startTime = System.currentTimeMillis();
-        while (System.currentTimeMillis() - startTime <= OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY) {
-            try {
-                innerCopyFile(owner, srcKey, dstKey, size);
-                return;
-            } catch (InterruptedIOException e) {
-                throw e;
-            } catch (OBSIOException e) {
-                String errMsg = String.format("Failed to copy file from %s to " + "%s with size %s,  retry time %s",
-                    srcKey, dstKey, size, retryTime);
-                LOG.debug(errMsg, e);
-                delayMs = OBSCommonUtils.getSleepTimeInMs(retryTime);
-                retryTime++;
-                if (System.currentTimeMillis() - startTime + delayMs
-                    < OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY) {
-                    try {
-                        Thread.sleep(delayMs);
-                    } catch (InterruptedException ie) {
-                        LOG.error(errMsg, e);
-                        throw e;
-                    }
-                }
-            }
-        }
-        innerCopyFile(owner, srcKey, dstKey, size);
+        throws IOException {
+        String path = srcKey + " to " + dstKey;
+        OBSCommonUtils.getOBSInvoker().retryByMaxTime(OBSOperateAction.copyFile, path, () -> {
+            innerCopyFile(owner, srcKey, dstKey, size);
+            return null;
+        }, true);
     }
 
     private static void innerCopyFile(final OBSFileSystem owner, final String srcKey, final String dstKey,
@@ -572,8 +523,7 @@ final class OBSObjectBucketUtils {
             owner.getObsClient()
                 .abortMultipartUpload(new AbortMultipartUploadRequest(owner.getBucket(), dstKey, uploadId));
 
-            throw OBSCommonUtils.extractException(
-                "Multi-part copy with id '" + uploadId + "' from " + srcKey + "to " + dstKey, dstKey, e);
+            throw OBSCommonUtils.extractException("copy part from " + srcKey + " to " + dstKey, dstKey, e);
         }
 
         // Make part numbers in ascending order
@@ -634,7 +584,7 @@ final class OBSObjectBucketUtils {
         final Path path = OBSCommonUtils.qualify(owner, f);
         String key = OBSCommonUtils.pathToKey(owner, path);
         LOG.debug("Getting path status for {}  ({})", path, key);
-        if (!StringUtils.isEmpty(key)) {
+        if (OBSCommonUtils.isStringNotEmpty(key)) {
             try {
                 ObjectMetadata meta = getObjectMetadata(owner, key);
 
@@ -644,7 +594,7 @@ final class OBSObjectBucketUtils {
                 } else {
                     LOG.debug("Found exact file: normal file");
                     return new OBSFileStatus(meta.getContentLength(), OBSCommonUtils.dateToLong(meta.getLastModified()),
-                        path, owner.getDefaultBlockSize(path), owner.getShortUserName());
+                        path, owner.getDefaultBlockSize(path), owner.getShortUserName(), meta.getEtag());
                 }
             } catch (ObsException e) {
                 if (e.getResponseCode() != OBSCommonUtils.NOT_FOUND_CODE) {
@@ -665,7 +615,7 @@ final class OBSObjectBucketUtils {
 
                         return new OBSFileStatus(meta.getContentLength(),
                             OBSCommonUtils.dateToLong(meta.getLastModified()), path, owner.getDefaultBlockSize(path),
-                            owner.getShortUserName());
+                            owner.getShortUserName(), meta.getEtag());
                     }
                 } catch (ObsException e) {
                     if (e.getResponseCode() != OBSCommonUtils.NOT_FOUND_CODE) {
@@ -676,7 +626,7 @@ final class OBSObjectBucketUtils {
         }
 
         try {
-            boolean isEmpty = OBSCommonUtils.innerIsFolderEmpty(owner, key);
+            boolean isEmpty = OBSCommonUtils.isFolderEmpty(owner, key);
             LOG.debug("Is dir ({}) empty? {}", path, isEmpty);
             return new OBSFileStatus(path, owner.getShortUserName());
         } catch (ObsException e) {
@@ -727,7 +677,7 @@ final class OBSObjectBucketUtils {
         }
         summary[2] += directories.size();
         LOG.debug(
-            String.format("file size [%d] - file count [%d] - directory count [%d] - " + "file path [%s]", summary[0],
+            String.format(Locale.ROOT,"file size [%d] - file count [%d] - directory count [%d] - " + "file path [%s]", summary[0],
                 summary[1], summary[2], newKey));
         return new ContentSummary.Builder().length(summary[0])
             .fileCount(summary[1])

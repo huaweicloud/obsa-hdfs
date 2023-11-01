@@ -16,9 +16,9 @@
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
-  <groupId>com.huaweicloud</groupId>
+  <groupId>com.huaweicloud.obs</groupId>
   <artifactId>hadoop-huaweicloud</artifactId>
-  <version>${hadoop.plat.version}-hw-46</version>
+  <version>3.1.1-hw-53.8</version>
   <name>hadoop-huaweicloud</name>
   <description>
     This module contains code to support integration with OBS.
@@ -26,12 +26,14 @@
   <packaging>jar</packaging>
 
   <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <file.encoding>UTF-8</file.encoding>
-    <hadoop.version>2.8.3.0101-hw-ei-14</hadoop.version>
-    <esdk.version>3.21.8.2</esdk.version>
-    <hadoop.plat.version>2.8.3</hadoop.plat.version>
-    <obsa.version>46</obsa.version>
+    <hadoop.version>3.1.1-hw-ei-315005</hadoop.version>
+    <esdk.version>3.23.3.1</esdk.version>
+    <hadoop.plat.version>3.1.1</hadoop.plat.version>
+    <obsa.version>53.8</obsa.version>
     <shading.prefix>obs.shaded</shading.prefix>
+    <jackson.databind.version>2.13.4.1</jackson.databind.version>
   </properties>
 
   <profiles>
@@ -44,7 +46,7 @@
             <artifactId>maven-shade-plugin</artifactId>
             <version>3.2.1</version>
             <configuration>
-              <createDependencyReducedPom>false</createDependencyReducedPom>
+              <createDependencyReducedPom>true</createDependencyReducedPom>
             </configuration>
             <executions>
               <execution>
@@ -55,21 +57,21 @@
                 </goals>
                 <configuration>
                   <relocations>
-                    <relocation>
-                      <!-- shade java-xmlbuilder -->
-                      <pattern>com.jamesmurty.utils</pattern>
-                      <shadedPattern>${shading.prefix}.com.jamesmurty.utils</shadedPattern>
-                    </relocation>
-                    <relocation>
-                      <!-- shade okio -->
-                      <pattern>okio</pattern>
-                      <shadedPattern>${shading.prefix}.okio</shadedPattern>
-                    </relocation>
-                    <relocation>
-                      <!-- shade okio -->
-                      <pattern>okhttp3</pattern>
-                      <shadedPattern>${shading.prefix}.okhttp3</shadedPattern>
-                    </relocation>
+<!--                    <relocation>-->
+<!--                      &lt;!&ndash; shade java-xmlbuilder &ndash;&gt;-->
+<!--                      <pattern>com.jamesmurty.utils</pattern>-->
+<!--                      <shadedPattern>${shading.prefix}.com.jamesmurty.utils</shadedPattern>-->
+<!--                    </relocation>-->
+<!--                    <relocation>-->
+<!--                      &lt;!&ndash; shade okio &ndash;&gt;-->
+<!--                      <pattern>okio</pattern>-->
+<!--                      <shadedPattern>${shading.prefix}.okio</shadedPattern>-->
+<!--                    </relocation>-->
+<!--                    <relocation>-->
+<!--                      &lt;!&ndash; shade okio &ndash;&gt;-->
+<!--                      <pattern>okhttp3</pattern>-->
+<!--                      <shadedPattern>${shading.prefix}.okhttp3</shadedPattern>-->
+<!--                    </relocation>-->
                     <relocation>
                       <!-- shade jackson -->
                       <pattern>com.fasterxml.jackson</pattern>
@@ -81,30 +83,30 @@
                   </transformers>
                   <artifactSet>
                     <includes>
-                      <include>com.jamesmurty.utils:*</include>
-                      <include>com.squareup.okio:*</include>
-                      <include>com.squareup.okhttp3:*</include>
+<!--                      <include>com.jamesmurty.utils:*</include>-->
+<!--                      <include>com.squareup.okio:*</include>-->
+<!--                      <include>com.squareup.okhttp3:*</include>-->
                       <include>com.huaweicloud:esdk-obs-java-optimised</include>
                       <include>com.fasterxml.jackson.core:*</include>
                     </includes>
                   </artifactSet>
                   <filters>
                     <!-- Exclude signatures -->
-                    <filter>
-                      <artifact>com.squareup.okhttp3:*</artifact>
-                      <excludes>
-                        <exclude>okhttp3/internal/connection/ExchangeFinder.class</exclude>
-                        <exclude>okhttp3/internal/connection/Transmitter.class</exclude>
-                        <exclude>okhttp3/internal/http/RetryAndFollowUpInterceptor.class</exclude>
-                      </excludes>
-                    </filter>
-                    <filter>
-                      <artifact>com.squareup.okio:*</artifact>
-                      <excludes>
-                        <exclude>okio/AsyncTimeout.class</exclude>
-                        <exclude>okio/SegmentPool.class</exclude>
-                      </excludes>
-                    </filter>
+<!--                    <filter>-->
+<!--                      <artifact>com.squareup.okhttp3:*</artifact>-->
+<!--                      <excludes>-->
+<!--                        <exclude>okhttp3/internal/connection/ExchangeFinder.class</exclude>-->
+<!--                        <exclude>okhttp3/internal/connection/Transmitter.class</exclude>-->
+<!--                        <exclude>okhttp3/internal/http/RetryAndFollowUpInterceptor.class</exclude>-->
+<!--                      </excludes>-->
+<!--                    </filter>-->
+<!--                    <filter>-->
+<!--                      <artifact>com.squareup.okio:*</artifact>-->
+<!--                      <excludes>-->
+<!--                        <exclude>okio/AsyncTimeout.class</exclude>-->
+<!--                        <exclude>okio/SegmentPool.class</exclude>-->
+<!--                      </excludes>-->
+<!--                    </filter>-->
                     <filter>
                       <artifact>*:*</artifact>
                       <excludes>
@@ -185,13 +187,40 @@
           <configuration>
               <source>8</source>
               <target>8</target>
-              <compilerArgument>-Xlint:unchecked</compilerArgument>
+              <compilerArgument>-Xlint:all</compilerArgument>
           </configuration>
       </plugin>
       <plugin>
         <groupId>org.codehaus.mojo</groupId>
         <artifactId>versions-maven-plugin</artifactId>
         <version>2.8.1</version>
+      </plugin>
+      <plugin>
+        <groupId>com.huawei.fuxi</groupId>
+        <artifactId>fuxicov-maven-plugin</artifactId>
+        <version>1.0.9-SNAPSHOT</version>
+        <executions>
+          <!--覆盖报告插桩部分-->
+          <execution>
+            <goals>
+              <goal>prepare-agent</goal>
+            </goals>
+            <configuration>
+              <!--include表示采集覆盖率的包的范围，可配置多条-->
+              <includes>
+                <include>com.huawei.*</include>
+              </includes>
+            </configuration>
+          </execution>
+          <!--覆盖报告生成部分，其中test表示在maven测试阶段后生成报告，有一些项目可能是verify阶段-->
+          <execution>
+            <id>report</id>
+            <phase>test</phase>
+            <goals>
+              <goal>report</goal>
+            </goals>
+          </execution>
+        </executions>
       </plugin>
     </plugins>
   </build>
@@ -267,7 +296,16 @@
           <artifactId>jetty-webapp</artifactId>
           <groupId>org.eclipse.jetty</groupId>
         </exclusion>
+        <exclusion>
+          <groupId>commons-lang</groupId>
+          <artifactId>commons-lang</artifactId>
+        </exclusion>
       </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>${jackson.databind.version}</version>
     </dependency>
     <dependency>
       <groupId>org.apache.hadoop</groupId>

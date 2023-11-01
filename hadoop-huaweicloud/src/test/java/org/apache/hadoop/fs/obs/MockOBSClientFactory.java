@@ -17,21 +17,23 @@
 
 package org.apache.hadoop.fs.obs;
 
-import org.apache.hadoop.classification.InterfaceAudience;
-import org.apache.hadoop.classification.InterfaceStability;
+import static org.mockito.Mockito.*;
 
-import java.io.IOException;
+import java.net.URI;
+
+import com.obs.services.ObsClient;
 
 /**
- * The exception that happens when you ask to create a file that already is
- * being created, but is not closed yet.
+ * An {@link OBSClientFactory} that returns Mockito mocks of the
+ * interface suitable for unit testing.
  */
-@InterfaceAudience.Private
-@InterfaceStability.Evolving
-public class AlreadyBeingCreatedException extends IOException {
-    static final long serialVersionUID = 0x12308AD009L;
+public class MockOBSClientFactory implements OBSClientFactory {
 
-    public AlreadyBeingCreatedException(String msg) {
-        super(msg);
+    @Override
+    public ObsClient createObsClient(URI name) {
+        String bucket = name.getHost();
+        ObsClient obsClient = mock(ObsClient.class);
+        when(obsClient.headBucket(bucket)).thenReturn(true);
+        return obsClient;
     }
 }

@@ -7,6 +7,7 @@ import com.obs.services.exception.ObsException;
 import com.obs.services.model.AbortMultipartUploadRequest;
 import com.obs.services.model.DeleteObjectsRequest;
 import com.obs.services.model.DeleteObjectsResult;
+import com.obs.services.model.GetObjectMetadataRequest;
 import com.obs.services.model.KeyAndVersion;
 import com.obs.services.model.ListMultipartUploadsRequest;
 import com.obs.services.model.ListObjectsRequest;
@@ -20,13 +21,9 @@ import com.obs.services.model.PutObjectResult;
 import com.obs.services.model.UploadPartRequest;
 import com.obs.services.model.UploadPartResult;
 import com.obs.services.model.fs.FSStatusEnum;
-import com.obs.services.model.fs.GetAttributeRequest;
 import com.obs.services.model.fs.GetBucketFSStatusRequest;
-import com.obs.services.model.fs.GetBucketFSStatusResult;
-import com.obs.services.model.fs.ObsFSAttribute;
 import com.obs.services.model.fs.WriteFileRequest;
 
-import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.CreateFlag;
 import org.apache.hadoop.fs.FileAlreadyExistsException;
@@ -37,6 +34,8 @@ import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.ParentNotDirectoryException;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.PathIsNotEmptyDirectoryException;
+import org.apache.hadoop.fs.permission.FsPermission;
+import org.apache.hadoop.fs.obs.security.ObsDelegationTokenManger;
 import org.apache.hadoop.security.AccessControlException;
 import org.apache.hadoop.security.ProviderUtils;
 import org.apache.hadoop.util.DiskChecker;
@@ -45,6 +44,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.EOFException;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
@@ -54,12 +54,14 @@ import java.util.Collection;
 import java.util.Date;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 
 /**
- * Common utils for {@link OBSFileSystem}.
+ * Common utils
  */
 //CHECKSTYLE:OFF
 public final class OBSCommonUtils {
@@ -73,7 +75,12 @@ public final class OBSCommonUtils {
     /**
      * Moved permanently response code.
      */
-    static final int MOVED_PERMANENTLY_CODE = 301;
+    static final int OTHER_CODE = -1;
+
+    /**
+     * IllegalArgument response code.
+     */
+    static final int IllEGALARGUMENT_CODE = 400;
 
     /**
      * Unauthorized response code.
@@ -91,6 +98,11 @@ public final class OBSCommonUtils {
     static final int NOT_FOUND_CODE = 404;
 
     /**
+     * Method not allowed
+     */
+    static final int NOT_ALLOWED_CODE = 405;
+
+    /**
      * File conflict.
      */
     static final int CONFLICT_CODE = 409;
@@ -106,25 +118,36 @@ public final class OBSCommonUtils {
     static final int EOF_CODE = 416;
 
     /**
+     * error response code.
+     */
+    static final int ERROR_CODE = 503;
+
+    /**
+     * qos error code
+     */
+    public static final String DETAIL_QOS_CODE = "GetQosTokenException";
+
+    /**
+     * qos indicator code
+     */
+    static final String DETAIL_QOS_INDICATOR_601 = "601";
+
+    static final String DETAIL_QOS_INDICATOR_602 = "602";
+
+    static OBSInvoker obsInvoker;
+
+
+    /**
      * Core property for provider path. Duplicated here for consistent code
      * across Hadoop version: {@value}.
      */
     static final String CREDENTIAL_PROVIDER_PATH = "hadoop.security.credential.provider.path";
 
-    /**
-     * Max time in milliseconds to retry when request failed.
-     */
-    public static long MAX_TIME_IN_MILLISECONDS_TO_RETRY = 180000;
+    static long retryMaxTime = OBSConstants.DEFAULT_RETRY_MAXTIME;
 
-    /**
-     * Min time in milliseconds to sleep between retry intervals.
-     */
-    static final int MIN_TIME_IN_MILLISECONDS_TO_SLEEP = 50;
+    static long retrySleepBaseTime = OBSConstants.DEFAULT_RETRY_SLEEP_BASETIME;
 
-    /**
-     * Max time in milliseconds to sleep between retry intervals.
-     */
-    static final int MAX_TIME_IN_MILLISECONDS_TO_SLEEP = 30000;
+    static long retrySleepMaxTime = OBSConstants.DEFAULT_RETRY_SLEEP_MAXTIME;
 
     /**
      * Variable base of power function.
@@ -144,16 +167,40 @@ public final class OBSCommonUtils {
     private OBSCommonUtils() {
     }
 
+
+    public static void init(OBSFileSystem fs, Configuration conf) {
+        obsInvoker = new OBSInvoker(fs, new OBSRetryPolicy(conf), OBSInvoker.LOG_EVENT);
+        OBSPosixBucketUtils.init(conf);
+    }
+
+    public static ObsDelegationTokenManger initDelegationTokenManger(OBSFileSystem fs, URI uri, Configuration conf)
+        throws IOException {
+        ObsDelegationTokenManger obsDelegationTokenManger = null;
+        if (ObsDelegationTokenManger.hasDelegationTokenProviders(conf)) {
+            LOG.debug("Initializing ObsDelegationTokenManager for {}", uri);
+            obsDelegationTokenManger = new ObsDelegationTokenManger();
+            obsDelegationTokenManger.initialize(fs, uri, conf);
+        }
+        return obsDelegationTokenManger;
+    }
+
+    public static OBSInvoker getOBSInvoker() {
+        return obsInvoker;
+    }
+
     /**
      * Set the max time in millisecond to retry on error.
-     * @param maxTime max time in millisecond to set for retry
+     *
+     * @param retryMaxTime max time in millisecond to set for retry
      */
-    static void setMaxTimeInMillisecondsToRetry(long maxTime) {
-        if (maxTime <= 0) {
-            LOG.warn("Invalid time[{}] to set for retry on error.", maxTime);
-            maxTime = OBSConstants.DEFAULT_TIME_IN_MILLISECOND_TO_RETRY;
+    static void setRetryTime(long retryMaxTime, long retrySleepBaseTime, long retrySleepMaxTime) {
+        if (retryMaxTime <= 0) {
+            LOG.warn("Invalid time[{}] to set for retry on error.", retryMaxTime);
+            retryMaxTime = OBSConstants.DEFAULT_RETRY_MAXTIME;
         }
-        MAX_TIME_IN_MILLISECONDS_TO_RETRY = maxTime;
+        OBSCommonUtils.retryMaxTime = retryMaxTime;
+        OBSCommonUtils.retrySleepBaseTime = retrySleepBaseTime;
+        OBSCommonUtils.retrySleepMaxTime = retrySleepMaxTime;
     }
 
     /**
@@ -167,57 +214,17 @@ public final class OBSCommonUtils {
      */
     static boolean getBucketFsStatus(final ObsClient obs, final String bucketName)
         throws FileNotFoundException, IOException {
-        GetBucketFSStatusRequest request = new GetBucketFSStatusRequest();
-        request.setBucketName(bucketName);
-        FSStatusEnum fsStatus = innerGetBucketFsStatus(obs, request);
-        return FSStatusEnum.ENABLED == fsStatus;
-    }
-
-    /**
-     * Get the fs status of the bucket with failure retry.
-     *
-     * @param obs     OBS client instance
-     * @param request information to get bucket FsStatus
-     * @return boolean value indicating if this bucket is a posix bucket
-     */
-    private static FSStatusEnum innerGetBucketFsStatus(final ObsClient obs, final GetBucketFSStatusRequest request)
-        throws IOException {
-        long delayMs;
-        int retryTime = 0;
-        long startTime = System.currentTimeMillis();
-        GetBucketFSStatusResult getBucketFsStatusResult;
-        while (System.currentTimeMillis() - startTime <= OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY) {
-            try {
-                getBucketFsStatusResult = obs.getBucketFSStatus(request);
-                return getBucketFsStatusResult.getStatus();
-            } catch (ObsException e) {
-                LOG.debug("Failed to getBucketFsStatus for [{}], retry time [{}], " + "exception [{}]",
-                    request.getBucketName(), retryTime, e);
-
-                IOException ioException = OBSCommonUtils.translateException("getBucketFSStatus",
-                    request.getBucketName(), e);
-                if (!(ioException instanceof OBSIOException)) {
-                    throw ioException;
-                }
-
-                delayMs = getSleepTimeInMs(retryTime);
-                retryTime++;
-                try {
-                    Thread.sleep(delayMs);
-                } catch (InterruptedException ie) {
-                    throw e;
-                }
-            }
-        }
-
+        GetBucketFSStatusRequest request = new GetBucketFSStatusRequest(bucketName);
+        FSStatusEnum fsStatus;
         try {
-            getBucketFsStatusResult = obs.getBucketFSStatus(request);
-        } catch (ObsException e) {
-            LOG.debug("Failed to getBucketFsStatus for [{}], retry time [{}], " + "exception [{}]",
-                request.getBucketName(), retryTime, e);
-            throw OBSCommonUtils.translateException("getBucketFSStatus", request.getBucketName(), e);
+            fsStatus = OBSCommonUtils.getOBSInvoker().retryByMaxTime(OBSOperateAction.getBucketFsStatus,
+                request.getBucketName(), () -> {
+                    return obs.getBucketFSStatus(request).getStatus();
+                },true);
+        } catch (FileNotFoundException e) {
+            throw new FileNotFoundException("Bucket " + bucketName + " does not exist");
         }
-        return getBucketFsStatusResult.getStatus();
+        return FSStatusEnum.ENABLED == fsStatus;
     }
 
     /**
@@ -310,7 +317,7 @@ public final class OBSCommonUtils {
      * @return the with a trailing "/", or, if it is the root key, "",
      */
     static String maybeAddTrailingSlash(final String key) {
-        if (!StringUtils.isEmpty(key) && !key.endsWith("/")) {
+        if (!isStringEmpty(key) && !key.endsWith("/")) {
             return key + '/';
         } else {
             return key;
@@ -318,7 +325,7 @@ public final class OBSCommonUtils {
     }
 
     /**
-     * Convert a path back to a key.
+     * Convert a key back to a Path.
      *
      * @param key input key
      * @return the path from this key
@@ -356,7 +363,7 @@ public final class OBSCommonUtils {
      * @return new key
      */
     static String maybeDeleteBeginningSlash(final String key) {
-        return !StringUtils.isEmpty(key) && key.startsWith("/") ? key.substring(1) : key;
+        return !isStringEmpty(key) && key.startsWith("/") ? key.substring(1) : key;
     }
 
     /**
@@ -366,7 +373,7 @@ public final class OBSCommonUtils {
      * @return new key
      */
     static String maybeAddBeginningSlash(final String key) {
-        return !StringUtils.isEmpty(key) && !key.startsWith("/") ? "/" + key : key;
+        return !isStringEmpty(key) && !key.startsWith("/") ? "/" + key : key;
     }
 
     /**
@@ -381,52 +388,74 @@ public final class OBSCommonUtils {
      */
     public static IOException translateException(final String operation, final String path,
         final ObsException exception) {
-        String message = String.format(
-            "%s%s: status [%d] - request id [%s] " + "- error code [%s] - error message [%s] - trace :%s ", operation,
-            path != null ? " on " + path : "", exception.getResponseCode(), exception.getErrorRequestId(),
-            exception.getErrorCode(), exception.getErrorMessage(), exception);
+        String headerErrorCode = null;
+        Map<String, String> responseHeaders = exception.getResponseHeaders();
+        if (responseHeaders != null) {
+            for (Map.Entry<String, String> entry : responseHeaders.entrySet()) {
+                if (entry.getKey().equals("error-code")) {
+                    headerErrorCode = entry.getValue();
+                    break;
+                }
+            }
+        }
+        String indicatorCode = exception.getErrorIndicator();
+        String bodyErrorCode = exception.getErrorCode();
+        String errorCode = bodyErrorCode != null ? bodyErrorCode :
+            headerErrorCode != null ? headerErrorCode : indicatorCode;
+
+        String message = String.format(Locale.ROOT,"%s%s: ResponseCode[%d],ErrorCode[%s],ErrorMessage[%s],RequestId[%s]",
+            operation, path == null || path.length() == 0 ?  "" : " on " + path, exception.getResponseCode(),
+            errorCode, exception.getErrorMessage(),exception.getErrorRequestId());
 
         IOException ioe;
 
         int status = exception.getResponseCode();
         switch (status) {
-            case MOVED_PERMANENTLY_CODE:
-                message = String.format("Received permanent redirect response, " + "status [%d] - request id [%s] - "
-                        + "error code [%s] - message [%s]", exception.getResponseCode(), exception.getErrorRequestId(),
-                    exception.getErrorCode(), exception.getErrorMessage());
-                ioe = new OBSIOException(message, exception);
+            case IllEGALARGUMENT_CODE:
+                OBSIllegalArgumentException illegalArgumentException = new OBSIllegalArgumentException(message);
+                illegalArgumentException.initCause(exception);
+                illegalArgumentException.setErrCode(errorCode);
+                ioe = illegalArgumentException;
                 break;
-            // permissions
             case UNAUTHORIZED_CODE:
             case FORBIDDEN_CODE:
                 ioe = new AccessControlException(message);
                 ioe.initCause(exception);
                 break;
-
-            // the object isn't there
             case NOT_FOUND_CODE:
             case GONE_CODE:
                 ioe = new FileNotFoundException(message);
                 ioe.initCause(exception);
                 break;
-
-            case CONFLICT_CODE:
-                ioe = new FileConflictException(message);
-                ioe.initCause(exception);
+            case NOT_ALLOWED_CODE:
+                OBSMethodNotAllowedException methodNotAllowedException = new OBSMethodNotAllowedException(message);
+                methodNotAllowedException.initCause(exception);
+                methodNotAllowedException.setErrCode(errorCode);
+                ioe = methodNotAllowedException;
                 break;
-
-            // out of range. This may happen if an object is overwritten with
-            // a shorter one while it is being read.
+            case CONFLICT_CODE:
+                OBSFileConflictException fileConflictException = new OBSFileConflictException(message);
+                fileConflictException.initCause(exception);
+                fileConflictException.setErrCode(errorCode);
+                ioe = fileConflictException;
+                break;
             case EOF_CODE:
                 ioe = new EOFException(message);
                 ioe.initCause(exception);
                 break;
-
             default:
-                // no specific exit code. Choose an IOE subclass based on the
-                // class
-                // of the caught exception
-                ioe = new OBSIOException(message, exception);
+                if (ERROR_CODE == status && (
+                    DETAIL_QOS_CODE.equals(errorCode) ||
+                        DETAIL_QOS_INDICATOR_601.equals(errorCode) ||
+                        DETAIL_QOS_INDICATOR_602.equals(errorCode))) {
+                    OBSQosException qosException = new OBSQosException(message, exception);
+                    qosException.setErrCode(errorCode);
+                    ioe = qosException;
+                } else {
+                    OBSIOException ioException = new OBSIOException(message, exception);
+                    ioException.setErrCode(errorCode);
+                    ioe = ioException;
+                }
                 break;
         }
         return ioe;
@@ -457,52 +486,10 @@ public final class OBSCommonUtils {
      */
     static void deleteObject(final OBSFileSystem owner, final String key) throws IOException {
         blockRootDelete(owner.getBucket(), key);
-        try {
-            innerDeleteObject(owner, key);
-            return;
-        } catch (ObsException e) {
-            LOG.error("Failed to deleteObject for [{}],  exception  [{}]", key, translateException("delete", key, e));
-            throw translateException("delete", key, e);
-        }
-    }
-
-    /**
-     * Delete an object with failure retry. Increments the {@code
-     * OBJECT_DELETE_REQUESTS} and write operation statistics.
-     *
-     * @param owner the owner OBSFileSystem instance.
-     * @param key   key to blob to delete.
-     */
-    private static void innerDeleteObject(final OBSFileSystem owner, final String key) throws IOException {
-        long delayMs;
-        int retryTime = 0;
-        long startTime = System.currentTimeMillis();
-        while (System.currentTimeMillis() - startTime <= OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY) {
-            try {
-                owner.getObsClient().deleteObject(owner.getBucket(), key);
-                owner.getSchemeStatistics().incrementWriteOps(1);
-                return;
-            } catch (ObsException e) {
-                LOG.debug("Delete path failed with [{}], " + "retry time [{}] - request id [{}] - "
-                        + "error code [{}] - error message [{}]", e.getResponseCode(), retryTime, e.getErrorRequestId(),
-                    e.getErrorCode(), e.getErrorMessage());
-
-                IOException ioException = OBSCommonUtils.translateException("innerDeleteObject", key, e);
-                if (!(ioException instanceof OBSIOException)) {
-                    throw ioException;
-                }
-
-                delayMs = getSleepTimeInMs(retryTime);
-                retryTime++;
-                try {
-                    Thread.sleep(delayMs);
-                } catch (InterruptedException ie) {
-                    throw ioException;
-                }
-            }
-        }
-
-        owner.getObsClient().deleteObject(owner.getBucket(), key);
+        OBSCommonUtils.getOBSInvoker().retryByMaxTime(OBSOperateAction.delete, key, () -> {
+            owner.getObsClient().deleteObject(owner.getBucket(), key);
+            return null;
+        }, true);
         owner.getSchemeStatistics().incrementWriteOps(1);
     }
 
@@ -521,8 +508,9 @@ public final class OBSCommonUtils {
             result = owner.getObsClient().deleteObjects(deleteRequest);
             owner.getSchemeStatistics().incrementWriteOps(1);
         } catch (ObsException e) {
-            LOG.warn("delete objects failed, request [{}], request id [{}] - " + "error code [{}] - error message [{}]",
-                deleteRequest, e.getErrorRequestId(), e.getErrorCode(), e.getErrorMessage());
+            LOG.warn("bulk delete objects failed: request [{}], response code [{}], error code [{}], "
+                    + "error message [{}], request id [{}]", deleteRequest, e.getResponseCode(), e.getErrorCode(),
+                e.getErrorMessage(), e.getErrorRequestId());
             for (KeyAndVersion keyAndVersion : deleteRequest.getKeyAndVersionsList()) {
                 deleteObject(owner, keyAndVersion.getKey());
             }
@@ -533,8 +521,11 @@ public final class OBSCommonUtils {
         if (result != null) {
             List<DeleteObjectsResult.ErrorResult> errorResults = result.getErrorResults();
             if (!errorResults.isEmpty()) {
-                LOG.warn("bulk delete {} objects, {} failed, begin to delete " + "one by one.",
-                    deleteRequest.getKeyAndVersionsList().size(), errorResults.size());
+                LOG.warn("bulk delete {} objects: {} failed, request id [{}].begin to delete one by one.detail info "
+                        + "example:key[{}],error code [{}],error message [{}]",
+                    deleteRequest.getKeyAndVersionsList().size(), errorResults.size(), result.getRequestId(),
+                    errorResults.get(0).getObjectKey(), errorResults.get(0).getErrorCode(),
+                    errorResults.get(0).getMessage());
                 for (DeleteObjectsResult.ErrorResult errorResult : errorResults) {
                     deleteObject(owner, errorResult.getObjectKey());
                 }
@@ -552,9 +543,11 @@ public final class OBSCommonUtils {
      * @return the request
      */
     static PutObjectRequest newPutObjectRequest(final OBSFileSystem owner, final String key,
-        final ObjectMetadata metadata, final File srcfile) {
+        final ObjectMetadata metadata, final File srcfile) throws FileNotFoundException {
         Preconditions.checkNotNull(srcfile);
-        PutObjectRequest putObjectRequest = new PutObjectRequest(owner.getBucket(), key, srcfile);
+        PutObjectRequest putObjectRequest = new PutObjectRequest(owner.getBucket(), key);
+        putObjectRequest.setInput(new FileInputStream(srcfile));
+        putObjectRequest.setAutoClose(false);
         putObjectRequest.setAcl(owner.getCannedACL());
         putObjectRequest.setMetadata(metadata);
         if (owner.getSse().isSseCEnable()) {
@@ -601,15 +594,17 @@ public final class OBSCommonUtils {
      * @throws ObsException on problems
      */
     static PutObjectResult putObjectDirect(final OBSFileSystem owner, final PutObjectRequest putObjectRequest)
-        throws ObsException {
-        long len;
-        if (putObjectRequest.getFile() != null) {
-            len = putObjectRequest.getFile().length();
-        } else {
-            len = putObjectRequest.getMetadata().getContentLength();
-        }
+        throws IOException {
+        PutObjectResult result = OBSCommonUtils.getOBSInvoker().retryByMaxTime(OBSOperateAction.putObject,
+            putObjectRequest.getObjectKey(), () -> {
+            if (putObjectRequest.getInput() instanceof FileInputStream) {
+                ((FileInputStream) putObjectRequest.getInput()).getChannel().position(0);
+            }
+            return owner.getObsClient().putObject(putObjectRequest);
+        },true);
 
-        PutObjectResult result = owner.getObsClient().putObject(putObjectRequest);
+        long len = putObjectRequest.getFile() != null ? putObjectRequest.getFile().length() :
+            putObjectRequest.getMetadata().getContentLength();
         owner.getSchemeStatistics().incrementWriteOps(1);
         owner.getSchemeStatistics().incrementBytesWritten(len);
         return result;
@@ -625,11 +620,16 @@ public final class OBSCommonUtils {
      * @return the result of the operation.
      * @throws ObsException on problems
      */
-    static UploadPartResult uploadPart(final OBSFileSystem owner, final UploadPartRequest request) throws ObsException {
-        long len = request.getPartSize();
-        UploadPartResult uploadPartResult = owner.getObsClient().uploadPart(request);
+    static UploadPartResult uploadPart(final OBSFileSystem owner, final UploadPartRequest request) throws IOException {
+        UploadPartResult uploadPartResult  = OBSCommonUtils.getOBSInvoker().retryByMaxTime(OBSOperateAction.uploadPart,
+            request.getObjectKey(), () -> {
+            if (request.getInput() instanceof FileInputStream) {
+                ((FileInputStream) request.getInput()).getChannel().position(0);
+            }
+            return owner.getObsClient().uploadPart(request);
+        },true);
         owner.getSchemeStatistics().incrementWriteOps(1);
-        owner.getSchemeStatistics().incrementBytesWritten(len);
+        owner.getSchemeStatistics().incrementBytesWritten(request.getPartSize());
         return uploadPartResult;
     }
 
@@ -703,7 +703,7 @@ public final class OBSCommonUtils {
      * @throws IOException           due to an IO problem.
      * @throws ObsException          on failures inside the OBS SDK
      */
-    static FileStatus[] innerListStatus(final OBSFileSystem owner, final Path f, final boolean recursive)
+    static FileStatus[] listStatus(final OBSFileSystem owner, final Path f, final boolean recursive)
         throws FileNotFoundException, IOException, ObsException {
         Path path = qualify(owner, f);
         String key = pathToKey(owner, path);
@@ -711,8 +711,8 @@ public final class OBSCommonUtils {
         List<FileStatus> result;
         final FileStatus fileStatus;
         try {
-            fileStatus = innerGetFileStatusWithRetry(owner, path);
-        } catch (FileConflictException e) {
+            fileStatus = getFileStatusWithRetry(owner, path);
+        } catch (OBSFileConflictException e) {
             throw new AccessControlException(e);
         }
 
@@ -724,7 +724,7 @@ public final class OBSCommonUtils {
 
             OBSListing.FileStatusListingIterator files = owner.getObsListing()
                 .createFileStatusListingIterator(path, request, OBSListing.ACCEPT_ALL,
-                    new OBSListing.AcceptAllButSelfAndS3nDirs(path));
+                    new OBSListing.AcceptAllButSelfAndOBSDirs(path));
             result = new ArrayList<>(files.getBatchSize());
             while (files.hasNext()) {
                 result.add(files.next());
@@ -806,12 +806,12 @@ public final class OBSCommonUtils {
      * @throws IOException                other IO problems
      * @throws ObsException               on failures inside the OBS SDK
      */
-    static boolean innerMkdirs(final OBSFileSystem owner, final Path path)
+    static boolean mkdirs(final OBSFileSystem owner, final Path path)
         throws IOException, FileAlreadyExistsException, ObsException {
         LOG.debug("Making directory: {}", path);
         FileStatus fileStatus;
         try {
-            fileStatus = innerGetFileStatusWithRetry(owner, path);
+            fileStatus = getFileStatusWithRetry(owner, path);
 
             if (fileStatus.isDirectory()) {
                 return true;
@@ -819,33 +819,37 @@ public final class OBSCommonUtils {
                 throw new FileAlreadyExistsException("Path is a file: " + path);
             }
         } catch (FileNotFoundException e) {
-            Path fPart = path.getParent();
-            do {
-                try {
-                    fileStatus = innerGetFileStatusWithRetry(owner, fPart);
-                    if (fileStatus.isDirectory()) {
-                        break;
-                    }
-                    if (fileStatus.isFile()) {
-                        throw new FileAlreadyExistsException(
-                            String.format("Can't make directory for path '%s'" + " since it is a file.", fPart));
-                    }
-                } catch (FileNotFoundException fnfe) {
-                    LOG.debug("file {} not fount, but ignore.", path);
-                } catch (FileConflictException fce) {
-                    throw new ParentNotDirectoryException(fce.getMessage());
-                }
-                fPart = fPart.getParent();
-            } while (fPart != null);
-
             String key = pathToKey(owner, path);
             if (owner.isFsBucket()) {
-                OBSPosixBucketUtils.fsCreateFolder(owner, key);
+                try {
+                    OBSPosixBucketUtils.fsCreateFolder(owner, key);
+                } catch (OBSFileConflictException e1) {
+                    throw new ParentNotDirectoryException(e1.getMessage());
+                }
             } else {
+                Path fPart = path.getParent();
+                do {
+                    try {
+                        fileStatus = getFileStatusWithRetry(owner, fPart);
+                        if (fileStatus.isDirectory()) {
+                            break;
+                        }
+                        if (fileStatus.isFile()) {
+                            throw new FileAlreadyExistsException(
+                                String.format("Can't make directory for path '%s'" + " since it is a file.", fPart));
+                        }
+                    } catch (FileNotFoundException fnfe) {
+                        LOG.debug("file {} not fount, but ignore.", path);
+                    } catch (OBSFileConflictException fce) {
+                        throw new ParentNotDirectoryException(fce.getMessage());
+                    }
+                    fPart = fPart.getParent();
+                } while (fPart != null);
+
                 OBSObjectBucketUtils.createFakeDirectory(owner, key);
             }
             return true;
-        } catch (FileConflictException e) {
+        } catch (OBSFileConflictException e) {
             throw new ParentNotDirectoryException(e.getMessage());
         }
     }
@@ -870,38 +874,11 @@ public final class OBSCommonUtils {
 
     static ObjectListing commonListObjects(final OBSFileSystem owner, final ListObjectsRequest request)
         throws IOException {
-        int retryTime = 0;
-        long delayMs;
-        long startTime = System.currentTimeMillis();
-        while (System.currentTimeMillis() - startTime <= OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY) {
-            try {
-                owner.getSchemeStatistics().incrementReadOps(1);
-                return owner.getObsClient().listObjects(request);
-            } catch (ObsException e) {
-                LOG.debug("Failed to commonListObjects for request[{}], retry " + "time [{}], due to exception[{}]",
-                    request, retryTime, e);
-
-                IOException ioException = OBSCommonUtils.translateException("listObjects (" + request + ")",
-                    request.getPrefix(), e);
-
-                if (!(ioException instanceof OBSIOException)) {
-                    throw ioException;
-                }
-
-                delayMs = getSleepTimeInMs(retryTime);
-                retryTime++;
-                try {
-                    Thread.sleep(delayMs);
-                } catch (InterruptedException ie) {
-                    LOG.error("Failed to commonListObjects for request[{}], " + "retry time [{}], due to exception[{}]",
-                        request, retryTime, ioException);
-                    throw ioException;
-                }
-            }
-        }
-
+        ObjectListing listObjects = OBSCommonUtils.getOBSInvoker().retryByMaxTime(OBSOperateAction.listObjects, request.getPrefix(), () -> {
+            return owner.getObsClient().listObjects(request);
+        },true);
         owner.getSchemeStatistics().incrementReadOps(1);
-        return owner.getObsClient().listObjects(request);
+        return listObjects;
     }
 
     /**
@@ -942,38 +919,11 @@ public final class OBSCommonUtils {
 
     static ObjectListing commonContinueListObjects(final OBSFileSystem owner, final ListObjectsRequest request)
         throws IOException {
-        long delayMs;
-        int retryTime = 0;
-        long startTime = System.currentTimeMillis();
-        while (System.currentTimeMillis() - startTime <= OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY) {
-            try {
-                owner.getSchemeStatistics().incrementReadOps(1);
-                return owner.getObsClient().listObjects(request);
-            } catch (ObsException e) {
-                LOG.debug("Continue list objects failed for request[{}], retry" + " time[{}], due to exception[{}]",
-                    request, retryTime, e);
-
-                IOException ioException = OBSCommonUtils.translateException("listObjects (" + request + ")",
-                    request.getPrefix(), e);
-
-                if (!(ioException instanceof OBSIOException)) {
-                    throw ioException;
-                }
-
-                delayMs = getSleepTimeInMs(retryTime);
-                retryTime++;
-                try {
-                    Thread.sleep(delayMs);
-                } catch (InterruptedException ie) {
-                    LOG.error("Continue list objects failed for request[{}], " + "retry time[{}], due to exception[{}]",
-                        request, retryTime, ioException);
-                    throw ioException;
-                }
-            }
-        }
-
+        ObjectListing listObjects = OBSCommonUtils.getOBSInvoker().retryByMaxTime(OBSOperateAction.listObjects, request.getPrefix(), () -> {
+            return owner.getObsClient().listObjects(request);
+        },true);
         owner.getSchemeStatistics().incrementReadOps(1);
-        return owner.getObsClient().listObjects(request);
+        return listObjects;
     }
 
     /**
@@ -1004,42 +954,14 @@ public final class OBSCommonUtils {
 
     // Used to check if a folder is empty or not.
     static boolean isFolderEmpty(final OBSFileSystem owner, final String key) throws IOException {
-        long delayMs;
-        int retryTime = 0;
-        long startTime = System.currentTimeMillis();
-        while (System.currentTimeMillis() - startTime <= OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY) {
-            try {
-                return innerIsFolderEmpty(owner, key);
-            } catch (ObsException e) {
-                LOG.debug("Failed to check empty folder for [{}], retry time [{}], " + "exception [{}]", key, retryTime,
-                    e);
-
-                IOException ioException = OBSCommonUtils.translateException("innerIsFolderEmpty", key, e);
-
-                if (!(ioException instanceof OBSIOException)) {
-                    throw ioException;
-                }
-
-                delayMs = getSleepTimeInMs(retryTime);
-                retryTime++;
-                try {
-                    Thread.sleep(delayMs);
-                } catch (InterruptedException ie) {
-                    throw ioException;
-                }
-            }
-        }
-
-        try {
+        return OBSCommonUtils.getOBSInvoker().retryByMaxTime(OBSOperateAction.isFolderEmpty, key, () -> {
             return innerIsFolderEmpty(owner, key);
-        } catch (ObsException e) {
-            throw OBSCommonUtils.translateException("innerIsFolderEmpty", key, e);
-        }
+        },true);
     }
 
     // Used to check if a folder is empty or not by counting the number of
     // sub objects in list.
-    private static boolean isFolderEmpty(final String key, final ObjectListing objects) {
+    private static boolean innerIsFolderEmptyDepth(final String key, final ObjectListing objects) {
         int count = objects.getObjects().size();
         if (count >= 2) {
             return false;
@@ -1068,7 +990,7 @@ public final class OBSCommonUtils {
         ObjectListing objects = owner.getObsClient().listObjects(request);
 
         if (!objects.getCommonPrefixes().isEmpty() || !objects.getObjects().isEmpty()) {
-            if (isFolderEmpty(obsKey, objects)) {
+            if (innerIsFolderEmptyDepth(obsKey, objects)) {
                 LOG.debug("Found empty directory {}", obsKey);
                 return true;
             }
@@ -1122,23 +1044,19 @@ public final class OBSCommonUtils {
      * @throws IOException any problem
      */
     static WriteFileRequest newAppendFileRequest(final OBSFileSystem owner, final String key, final long recordPosition,
-        final File tmpFile) throws IOException {
+        final File tmpFile, final FileStatus fileStatus) throws IOException {
         Preconditions.checkNotNull(key);
         Preconditions.checkNotNull(tmpFile);
-        ObsFSAttribute obsFsAttribute;
-        try {
-            GetAttributeRequest getAttributeReq = new GetAttributeRequest(owner.getBucket(), key);
-            obsFsAttribute = owner.getObsClient().getAttribute(getAttributeReq);
-        } catch (ObsException e) {
-            throw translateException("GetAttributeRequest", key, e);
-        }
 
-        long appendPosition = Math.max(recordPosition, obsFsAttribute.getContentLength());
-        if (recordPosition != obsFsAttribute.getContentLength()) {
+        long appendPosition = Math.max(recordPosition, fileStatus.getLen());
+        if (recordPosition != fileStatus.getLen()) {
             LOG.warn("append url[{}] position[{}], file contentLength[{}] not" + " equal to recordPosition[{}].", key,
-                appendPosition, obsFsAttribute.getContentLength(), recordPosition);
+                appendPosition, fileStatus.getLen(), recordPosition);
         }
-        WriteFileRequest writeFileReq = new WriteFileRequest(owner.getBucket(), key, tmpFile, appendPosition);
+        WriteFileRequest writeFileReq = new WriteFileRequest(owner.getBucket(), key);
+        writeFileReq.setInput(new FileInputStream(tmpFile));
+        writeFileReq.setPosition(appendPosition);
+        writeFileReq.setAutoClose(false);
         writeFileReq.setAcl(owner.getCannedACL());
         return writeFileReq;
     }
@@ -1154,21 +1072,15 @@ public final class OBSCommonUtils {
      * @throws IOException any problem
      */
     static WriteFileRequest newAppendFileRequest(final OBSFileSystem owner, final String key, final long recordPosition,
-        final InputStream inputStream) throws IOException {
+        final InputStream inputStream, final FileStatus fileStatus) {
         Preconditions.checkNotNull(key);
         Preconditions.checkNotNull(inputStream);
-        ObsFSAttribute obsFsAttribute;
-        try {
-            GetAttributeRequest getAttributeReq = new GetAttributeRequest(owner.getBucket(), key);
-            obsFsAttribute = owner.getObsClient().getAttribute(getAttributeReq);
-        } catch (ObsException e) {
-            throw translateException("GetAttributeRequest", key, e);
-        }
+        Preconditions.checkNotNull(fileStatus);
 
-        long appendPosition = Math.max(recordPosition, obsFsAttribute.getContentLength());
-        if (recordPosition != obsFsAttribute.getContentLength()) {
+        long appendPosition = Math.max(recordPosition, fileStatus.getLen());
+        if (recordPosition != fileStatus.getLen()) {
             LOG.warn("append url[{}] position[{}], file contentLength[{}] not" + " equal to recordPosition[{}].", key,
-                appendPosition, obsFsAttribute.getContentLength(), recordPosition);
+                appendPosition, fileStatus.getLen(), recordPosition);
         }
         WriteFileRequest writeFileReq = new WriteFileRequest(owner.getBucket(), key, inputStream, appendPosition);
         writeFileReq.setAcl(owner.getCannedACL());
@@ -1183,20 +1095,16 @@ public final class OBSCommonUtils {
      * @throws IOException on any failure to append file
      */
     static void appendFile(final OBSFileSystem owner, final WriteFileRequest appendFileRequest) throws IOException {
-        long len = 0;
-        if (appendFileRequest.getFile() != null) {
-            len = appendFileRequest.getFile().length();
-        }
+        OBSCommonUtils.getOBSInvoker().retryByMaxTime(OBSOperateAction.appendFile, appendFileRequest.getObjectKey(), () -> {
+            if (appendFileRequest.getInput() instanceof FileInputStream) {
+                ((FileInputStream) appendFileRequest.getInput()).getChannel().position(0);
+            }
+            return owner.getObsClient().writeFile(appendFileRequest);
+        },true);
 
-        try {
-            LOG.debug("Append file, key {} position {} size {}", appendFileRequest.getObjectKey(),
-                appendFileRequest.getPosition(), len);
-            owner.getObsClient().writeFile(appendFileRequest);
-            owner.getSchemeStatistics().incrementWriteOps(1);
-            owner.getSchemeStatistics().incrementBytesWritten(len);
-        } catch (ObsException e) {
-            throw translateException("AppendFile", appendFileRequest.getObjectKey(), e);
-        }
+        long len = appendFileRequest.getFile() != null ? appendFileRequest.getFile().length() : 0;
+        owner.getSchemeStatistics().incrementWriteOps(1);
+        owner.getSchemeStatistics().incrementBytesWritten(len);
     }
 
     /**
@@ -1205,7 +1113,7 @@ public final class OBSCommonUtils {
      *
      * @param closeables the objects to close
      */
-    static void closeAll(final java.io.Closeable... closeables) {
+    public static void closeAll(final java.io.Closeable... closeables) {
         for (java.io.Closeable c : closeables) {
             if (c != null) {
                 try {
@@ -1251,18 +1159,26 @@ public final class OBSCommonUtils {
      * @param blockSize block size to declare.
      * @param owner     owner of the file
      * @return a status entry
+     * @throws IOException If an I/O error occurred
      */
     static OBSFileStatus createFileStatus(final Path keyPath, final ObsObject summary, final long blockSize,
-        final String owner) {
+        final OBSFileSystem owner) throws IOException {
+        OBSFileStatus status = null;
         if (objectRepresentsDirectory(summary.getObjectKey(), summary.getMetadata().getContentLength())) {
             long lastModified = summary.getMetadata().getLastModified() == null
                 ? System.currentTimeMillis()
                 : OBSCommonUtils.dateToLong(summary.getMetadata().getLastModified());
-            return new OBSFileStatus(keyPath, lastModified, owner);
+            status = new OBSFileStatus(keyPath, lastModified, owner.getShortUserName());
         } else {
-            return new OBSFileStatus(summary.getMetadata().getContentLength(),
-                dateToLong(summary.getMetadata().getLastModified()), keyPath, blockSize, owner);
+            status = new OBSFileStatus(summary.getMetadata().getContentLength(),
+                dateToLong(summary.getMetadata().getLastModified()), keyPath, blockSize, owner.getShortUserName());
         }
+
+        if (owner.supportDisguisePermissionsMode()) {
+            OBSCommonUtils.setAccessControlAttrForFileStatus(owner, status,
+                getObjectMetadata(owner, summary.getObjectKey()));
+        }
+        return status;
     }
 
     /**
@@ -1296,17 +1212,9 @@ public final class OBSCommonUtils {
      * @throws IOException on any problem
      */
     private static String getPassword(final Configuration conf, final String key, final String val) throws IOException {
-        return StringUtils.isEmpty(val) ? lookupPassword(conf, key) : val;
+        return isStringEmpty(val) ? lookupPassword(conf, key) : val;
     }
 
-    /**
-     * Get a password from a configuration/configured credential providers.
-     *
-     * @param conf configuration
-     * @param key  key to look up
-     * @return a password or the value in {@code defVal}
-     * @throws IOException on any problem
-     */
     private static String lookupPassword(final Configuration conf, final String key) throws IOException {
         try {
             final char[] pass = conf.getPassword(key);
@@ -1327,56 +1235,35 @@ public final class OBSCommonUtils {
     }
 
     /**
-     * Get a integer option not smaller than the minimum allowed value.
-     *
-     * @param conf   configuration
-     * @param key    key to look up
-     * @param defVal default value
-     * @param min    minimum value
-     * @return the value
-     * @throws IllegalArgumentException if the value is below the minimum
+     * Get a integer not smaller than the minimum allowed value.
      */
     public static int intOption(final Configuration conf, final String key, final int defVal, final int min) {
         int v = conf.getInt(key, defVal);
         Preconditions.checkArgument(v >= min,
-            String.format("Value of %s: %d is below the minimum value %d", key, v, min));
+            String.format(Locale.ROOT, "Value of %s: %d is below the minimum value %d", key, v, min));
         LOG.debug("Value of {} is {}", key, v);
         return v;
     }
 
     /**
-     * Get a long option not smaller than the minimum allowed value.
-     *
-     * @param conf   configuration
-     * @param key    key to look up
-     * @param defVal default value
-     * @param min    minimum value
-     * @return the value
-     * @throws IllegalArgumentException if the value is below the minimum
+     * Get a long not smaller than the minimum allowed value.
      */
     static long longOption(final Configuration conf, final String key, final long defVal, final long min) {
         long v = conf.getLong(key, defVal);
         Preconditions.checkArgument(v >= min,
-            String.format("Value of %s: %d is below the minimum value %d", key, v, min));
+            String.format(Locale.ROOT, "Value of %s: %d is below the minimum value %d", key, v, min));
         LOG.debug("Value of {} is {}", key, v);
         return v;
     }
 
     /**
-     * Get a long option not smaller than the minimum allowed value, supporting
+     * Get a long not smaller than the minimum allowed value, supporting
      * memory prefixes K,M,G,T,P.
-     *
-     * @param conf   configuration
-     * @param key    key to look up
-     * @param defVal default value
-     * @param min    minimum value
-     * @return the value
-     * @throws IllegalArgumentException if the value is below the minimum
      */
     public static long longBytesOption(final Configuration conf, final String key, final long defVal, final long min) {
         long v = conf.getLongBytes(key, defVal);
         Preconditions.checkArgument(v >= min,
-            String.format("Value of %s: %d is below the minimum value %d", key, v, min));
+            String.format(Locale.ROOT, "Value of %s: %d is below the minimum value %d", key, v, min));
         LOG.debug("Value of {} is {}", key, v);
         return v;
     }
@@ -1442,26 +1329,20 @@ public final class OBSCommonUtils {
      */
     static Configuration propagateBucketOptions(final Configuration source, final String bucket) {
 
-        Preconditions.checkArgument(StringUtils.isNotEmpty(bucket), "bucket");
+        Preconditions.checkArgument(isStringNotEmpty(bucket), "bucket");
         final String bucketPrefix = OBSConstants.FS_OBS_BUCKET_PREFIX + bucket + '.';
         LOG.debug("Propagating entries under {}", bucketPrefix);
         final Configuration dest = new Configuration(source);
         for (Map.Entry<String, String> entry : source) {
             final String key = entry.getKey();
-            // get the (unexpanded) value.
             final String value = entry.getValue();
             if (!key.startsWith(bucketPrefix) || bucketPrefix.equals(key)) {
                 continue;
             }
-            // there's a bucket prefix, so strip it
             final String stripped = key.substring(bucketPrefix.length());
             if (stripped.startsWith("bucket.") || "impl".equals(stripped)) {
-                // tell user off
                 LOG.debug("Ignoring bucket option {}", key);
             } else {
-                // propagate the value, building a new origin field.
-                // to track overwrites, the generic key is overwritten even if
-                // already matches the new one.
                 final String generic = OBSConstants.FS_OBS_PREFIX + stripped;
                 LOG.debug("Updating {}", generic);
                 dest.set(generic, value, key);
@@ -1486,7 +1367,7 @@ public final class OBSCommonUtils {
         if (!customCredentials.isEmpty()) {
             List<String> all = Lists.newArrayList(customCredentials);
             all.addAll(hadoopCredentials);
-            String joined = StringUtils.join(all, ',');
+            String joined = String.join(",", all);
             LOG.debug("Setting {} to {}", CREDENTIAL_PROVIDER_PATH, joined);
             conf.set(CREDENTIAL_PROVIDER_PATH, joined,
                 "patch of " + OBSConstants.OBS_SECURITY_CREDENTIAL_PROVIDER_PATH);
@@ -1522,60 +1403,6 @@ public final class OBSCommonUtils {
                 }
             }
         }
-    }
-
-    /**
-     * Verify that the bucket exists. This does not check permissions, not even
-     * read access.
-     *
-     * @param owner the owner OBSFileSystem instance
-     * @throws FileNotFoundException the bucket is absent
-     * @throws IOException           any other problem talking to OBS
-     */
-    static void verifyBucketExists(final OBSFileSystem owner) throws FileNotFoundException, IOException {
-        try {
-            if (!innerVerifyBucketExists(owner)) {
-                throw new FileNotFoundException("Bucket " + owner.getBucket() + " does not exist");
-            }
-        } catch (IOException e) {
-            LOG.error("Failed to head bucket for [{}] , exception [{}]", owner.getBucket(), e);
-            throw e;
-        }
-    }
-
-    /**
-     * Verify that the bucket exists with failure retry.
-     *
-     * @param owner the owner OBSFileSystem instance
-     * @return boolean whether the bucket exists
-     */
-    private static boolean innerVerifyBucketExists(final OBSFileSystem owner) throws IOException {
-        long delayMs;
-        int retryTime = 0;
-        long startTime = System.currentTimeMillis();
-        while (System.currentTimeMillis() - startTime <= OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY) {
-            try {
-                return owner.getObsClient().headBucket(owner.getBucket());
-            } catch (ObsException e) {
-                IOException ioException = OBSCommonUtils.translateException("verifyBucketExists", owner.getBucket(), e);
-                LOG.debug("Failed to head bucket for [{}], retry time [{}], " + "exception [{}]", owner.getBucket(),
-                    retryTime, ioException);
-
-                if (!(ioException instanceof OBSIOException)) {
-                    throw ioException;
-                }
-
-                delayMs = getSleepTimeInMs(retryTime);
-                retryTime++;
-                try {
-                    Thread.sleep(delayMs);
-                } catch (InterruptedException ie) {
-                    throw ioException;
-                }
-            }
-        }
-
-        return owner.getObsClient().headBucket(owner.getBucket());
     }
 
     /**
@@ -1652,49 +1479,101 @@ public final class OBSCommonUtils {
      * @throws FileNotFoundException when the path does not exist
      * @throws IOException           on other problems
      */
-    static FileStatus innerGetFileStatusWithRetry(final OBSFileSystem owner, final Path f)
+    static OBSFileStatus getFileStatusWithRetry(final OBSFileSystem owner, final Path f)
         throws FileNotFoundException, IOException {
-        long delayMs;
-        int retryTime = 0;
-        long startTime = System.currentTimeMillis();
-        while (System.currentTimeMillis() - startTime <= MAX_TIME_IN_MILLISECONDS_TO_RETRY) {
-            try {
-                return owner.innerGetFileStatus(f);
-            } catch (OBSIOException e) {
-                OBSFileSystem.LOG.debug("Failed to get file status for [{}], retry time [{}], " + "exception [{}]", f,
-                    retryTime, e);
+        return OBSCommonUtils.getOBSInvoker().retryByMaxTime(OBSOperateAction.getFileStatus, OBSCommonUtils.pathToKey(owner, f), () -> {
+            return owner.innerGetFileStatus(f);
+        },true);
+    }
 
-                delayMs = getSleepTimeInMs(retryTime);
-                retryTime++;
-                try {
-                    Thread.sleep(delayMs);
-                } catch (InterruptedException ie) {
-                    throw e;
-                }
+    public static long getSleepTimeInMs(final int retryCount) {
+        long sleepTime = OBSCommonUtils.retrySleepBaseTime * (long) ((int) Math.pow(
+            OBSCommonUtils.VARIABLE_BASE_OF_POWER_FUNCTION, retryCount));
+        return sleepTime > OBSCommonUtils.retrySleepMaxTime ? OBSCommonUtils.retrySleepMaxTime : sleepTime;
+    }
+
+    public static void setMetricsAbnormalInfo(OBSFileSystem fs, OBSOperateAction opName, Exception exception) {
+        long startTime = System.currentTimeMillis();
+        if (fs.getMetricSwitch()) {
+            BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(opName, exception, BasicMetricsConsumer.MetricKind.abnormal);
+            fs.getMetricsConsumer().putMetrics(record);
+            long endTime = System.currentTimeMillis();
+
+            long costTime = (endTime - startTime) / 1000;
+            if (costTime >= fs.getInvokeCountThreshold() && !(fs.getMetricsConsumer() instanceof DefaultMetricsConsumer)) {
+                LOG.warn("putMetrics cosetTime too much：exception: {},opName: {} " + "costTime: {}", record.getExceptionIns().getMessage(),
+                        record.getObsOperateAction(), costTime);
             }
         }
-
-        return owner.innerGetFileStatus(f);
     }
 
-    public static long getSleepTimeInMs(final int retryTime) {
-        long sleepTime = OBSCommonUtils.MIN_TIME_IN_MILLISECONDS_TO_SLEEP * (long) ((int) Math.pow(
-            OBSCommonUtils.VARIABLE_BASE_OF_POWER_FUNCTION, retryTime));
-        sleepTime = sleepTime > OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_SLEEP
-            ? OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_SLEEP
-            : sleepTime;
-        return sleepTime;
-    }
-
-    public static void setMetricsInfo(OBSFileSystem fs, BasicMetricsConsumer.MetricRecord record) {
+    public static void setMetricsNormalInfo(OBSFileSystem fs, OBSOperateAction opName, long start) {
         long startTime = System.currentTimeMillis();
-        fs.getMetricsConsumer().putMetrics(record);
-        long endTime = System.currentTimeMillis();
+        if (fs.getMetricSwitch()) {
+            BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
+                     opName, System.currentTimeMillis() - start, BasicMetricsConsumer.MetricKind.normal);
+            fs.getMetricsConsumer().putMetrics(record);
+            long endTime = System.currentTimeMillis();
 
-        long costTime = (endTime - startTime) / 1000;
-        if (costTime >= fs.getInvokeCountThreshold() && !(fs.getMetricsConsumer() instanceof DefaultMetricsConsumer)) {
-            LOG.warn("putMetrics cosetTime too much：opType: {},opName: {} " + "costTime: {}", record.getOpType(),
-                record.getOpName(), costTime);
+            long costTime = (endTime - startTime) / 1000;
+            if (costTime >= fs.getInvokeCountThreshold() && !(fs.getMetricsConsumer() instanceof DefaultMetricsConsumer)) {
+                LOG.warn("putMetrics cosetTime too much：opName: {} " + "costTime: {}", record.getObsOperateAction(), costTime);
+            }
         }
+    }
+
+    public static void putQosMetric(OBSFileSystem fs, OBSOperateAction action, IOException e) {
+        if (e instanceof OBSQosException) {
+            OBSCommonUtils.setMetricsAbnormalInfo(fs, action, e);
+        }
+    }
+
+    public static boolean isStringEmpty(String str)  {
+        return str == null || str.length() == 0;
+    }
+
+    public static boolean isStringNotEmpty(String str) {
+        return !isStringEmpty(str);
+    }
+
+    public static boolean stringEqualsIgnoreCase(String str1, String str2) {
+        return str1 == null ? str2 == null : str1.equalsIgnoreCase(str2);
+    }
+
+    public static String toHex(byte[] bytes) {
+        StringBuilder result = new StringBuilder();
+        for (byte b : bytes) {
+            String hex = Integer.toHexString(b & 0xFF);
+            if (hex.length() == 1) {
+                result.append('0');
+            }
+
+            result.append(hex);
+        }
+        return result.toString();
+    }
+
+    static Map<String, Object> getObjectMetadata(final OBSFileSystem fs, final String key) throws IOException {
+        GetObjectMetadataRequest req = new GetObjectMetadataRequest(fs.getBucket(), key);
+        ObjectMetadata metadata = getOBSInvoker().retryByMaxTime(OBSOperateAction.getObjectMetadata, key,
+            () -> fs.getObsClient().getObjectMetadata(req), true);
+        return metadata.getAllMetadata();
+    }
+
+    static void setAccessControlAttrForFileStatus(final OBSFileSystem fs, final OBSFileStatus status,
+        final Map<String, Object> objMeta) {
+        FsPermission fsPermission = null;
+        try {
+            fsPermission = Optional.ofNullable(objMeta.get("permission")).map(Object::toString)
+                .map(Short::valueOf).map(FsPermission::new).orElse(null);
+        } catch (NumberFormatException e) {
+            LOG.debug("File {} permission is invalid, use default permission.", status.getPath());
+        }
+
+        status.setAccessControlAttr(
+            Optional.ofNullable(objMeta.get("user")).map(Object::toString).orElse(fs.getShortUserName()),
+            Optional.ofNullable(objMeta.get("group")).map(Object::toString).orElse(fs.getShortUserName()),
+            fsPermission
+        );
     }
 }

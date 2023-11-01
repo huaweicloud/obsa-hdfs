@@ -26,111 +26,70 @@ import java.io.IOException;
  */
 public interface BasicMetricsConsumer extends Closeable {
 
+    enum MetricKind {
+        normal,abnormal
+    }
+
     class MetricRecord {
         /**
          * Operation name, such as listStatus.
          */
-        private String opName;
-
-        /**
-         * Operation result: true for success, or false for failure.
-         */
-        private boolean success;
+        private OBSOperateAction obsOperateAction;
 
         /**
          * Operation cost time in ms.
          */
         private long costTime;
+        /**
+         * Obs detail error msg
+         */
+        private Exception exception;
 
-        private String opType;
+        /**
+         *  normal logic or exception logic
+         */
+        private MetricKind kind;
 
-        //opName
-        public static final String READ = "read";
 
-        public static final String CLOSE = "close";
-
-        public static final String READFULLY = "readFully";
-
-        static final String HFLUSH = "hflush";
-
-        static final String WRITE = "write";
-
-        static final String CREATE = "create";
-
-        static final String CREATE_NR = "createNonRecursive";
-
-        static final String APPEND = "append";
-
-        static final String RENAME = "rename";
-
-        static final String DELETE = "delete";
-
-        static final String LIST_STATUS = "listStatus";
-
-        static final String MKDIRS = "mkdirs";
-
-        static final String GET_FILE_STATUS = "getFileStatus";
-
-        static final String GET_CONTENT_SUMMARY = "getContentSummary";
-
-        static final String COPYFROMLOCAL = "copyFromLocalFile";
-
-        static final String LIST_FILES = "listFiles";
-
-        static final String LIST_LOCATED_STS = "listLocatedStatus";
-
-        static final String OPEN = "open";
-
-        //opType
-        public static final String ONEBYTE = "1byte";
-
-        public static final String BYTEBUF = "byteBuf";
-
-        public static final String INPUT = "input";
-
-        public static final String RANDOM = "random";
-
-        public static final String SEQ = "seq";
-
-        static final String OUTPUT = "output";
-
-        static final String FLAGS = "flags";
-
-        static final String NONRECURSIVE = "nonrecursive";
-
-        static final String RECURSIVE = "recursive";
-
-        static final String FS = "fs";
-
-        static final String OVERWRITE = "overwrite";
-
-        public MetricRecord(String opType, String opName, boolean success, long costTime) {
-            this.opName = opName;
-            this.opType = opType;
-            this.success = success;
+        //正常: kind:指示是什么性能追踪类信息还是异常；opName 操作接口；
+        public MetricRecord(OBSOperateAction opName, long costTime, MetricKind kind) {
+            this.obsOperateAction = opName;
             this.costTime = costTime;
+            this.kind = kind;
         }
 
-        public String getOpName() {
-            return opName;
+        //异常:opName 操作类型；  opDetail 代表obs错误码
+        public MetricRecord(OBSOperateAction opName, Exception exception, MetricKind kind) {
+            this.obsOperateAction = opName;
+            this.exception = exception;
+            this.kind = kind;
         }
 
-        public boolean isSuccess() {
-            return success;
+        public OBSOperateAction getObsOperateAction() {
+            return obsOperateAction;
         }
 
         public long getCostTime() {
             return costTime;
         }
 
-        public String getOpType() {
-            return opType;
+        //获取异常实例
+        public Exception getExceptionIns() {
+            return exception;
+        }
+
+        public MetricKind getKind() {
+            return kind;
+        }
+
+        public void setKind(MetricKind kind) {
+            this.kind = kind;
         }
 
         @Override
         public String toString() {
-            return "MetricRecord{" + "opName='" + opName + ", success=" + success + ", costTime=" + costTime
-                + ", opType=" + opType + '}';
+            return "MetricRecord{" + "opName='" + obsOperateAction + ", costTime=" + costTime
+                + ", exception=" + exception + ",kind=" + kind + '}';
         }
 
     }

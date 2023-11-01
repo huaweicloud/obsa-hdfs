@@ -64,8 +64,14 @@ class DefaultMetricsConsumer implements BasicMetricsConsumer {
     @Override
     public boolean putMetrics(MetricRecord metricRecord) {
         if (LOG.isDebugEnabled()) {
-            LOG.debug("[Metrics]: url[{}], opName [{}], costTime[{}], " + "opResult[{}]", this.uri,
-                metricRecord.getOpName(), metricRecord.getCostTime(), metricRecord.isSuccess());
+            if (metricRecord.getKind().equals(MetricKind.normal)) {
+                LOG.debug("[Metrics]: url[{}], action [{}], kind[{}], costTime[{}] ", this.uri,
+                        metricRecord.getObsOperateAction(), metricRecord.getKind(), metricRecord.getCostTime());
+            }else {
+                LOG.debug("[Metrics]: url[{}], action [{}], kind[{}], exception[{}] ", this.uri,
+                        metricRecord.getObsOperateAction(), metricRecord.getKind(), metricRecord.getExceptionIns());
+            }
+
         }
         return true;
     }

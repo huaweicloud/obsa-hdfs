@@ -5,8 +5,9 @@ import java.io.IOException;
 /**
  * OBS file conflict exception.
  */
-class FileConflictException extends IOException {
+class OBSFileConflictException extends IOException implements WithErrCode {
     private static final long serialVersionUID = -897856973823710492L;
+    private String errCode;
 
     /**
      * Constructs a <code>FileConflictException</code> with the specified detail
@@ -14,9 +15,18 @@ class FileConflictException extends IOException {
      * <code>{@link java.lang.Throwable#getMessage}</code>
      * method of class <code>java.lang.Throwable</code>.
      *
-     * @param s the detail message.
+     * @param message the detail message.
      */
-    FileConflictException(final String s) {
-        super(s);
+    OBSFileConflictException(final String message) {
+        super(message);
+    }
+
+    public void setErrCode(String errCode) {
+        this.errCode = errCode;
+    }
+
+    @Override
+    public String getErrCode() {
+        return this.errCode;
     }
 }

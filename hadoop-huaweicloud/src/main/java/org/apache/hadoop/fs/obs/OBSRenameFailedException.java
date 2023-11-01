@@ -25,13 +25,15 @@ import org.apache.hadoop.fs.PathIOException;
  * Exception to indicate a specific rename failure. The exit code defines the
  * value returned by {@link OBSFileSystem#rename(Path, Path)}.
  */
-class RenameFailedException extends PathIOException {
+class OBSRenameFailedException extends PathIOException {
+    private static final long serialVersionUID = -1993835850714285642L;
+
     /**
      * Exit code to be returned.
      */
     private boolean exitCode = false;
 
-    RenameFailedException(final Path src, final Path optionalDest, final String error) {
+    OBSRenameFailedException(final Path src, final Path optionalDest, final String error) {
         super(src.toString(), error);
         setOperation("rename");
         if (optionalDest != null) {
@@ -43,13 +45,7 @@ class RenameFailedException extends PathIOException {
         return exitCode;
     }
 
-    /**
-     * Set the exit code.
-     *
-     * @param code exit code to raise
-     * @return the exception
-     */
-    public RenameFailedException withExitCode(final boolean code) {
+    public OBSRenameFailedException withExitCode(final boolean code) {
         this.exitCode = code;
         return this;
     }

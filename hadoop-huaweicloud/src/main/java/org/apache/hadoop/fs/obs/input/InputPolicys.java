@@ -21,6 +21,8 @@ public final class InputPolicys {
                 return new BasicInputPolicyFactory();
             case OBSConstants.READAHEAD_POLICY_ADVANCE:
                 return new ExtendInputPolicyFactory();
+            case OBSConstants.READAHEAD_POLICY_MEMARTSCC:
+                return new MemArtsCCInputPolicyFactory();
             default:
                 throw new IllegalArgumentException("Unsupported block buffer" + " \"" + name + '"');
         }

@@ -22,6 +22,7 @@ import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.permission.FsPermission;
 
 /**
  * File status for an OBS file.
@@ -30,7 +31,10 @@ import org.apache.hadoop.fs.Path;
  */
 @InterfaceAudience.Private
 @InterfaceStability.Evolving
-class OBSFileStatus extends FileStatus {
+public class OBSFileStatus extends FileStatus {
+
+    private String etag;
+
     /**
      * Create a directory status.
      *
@@ -82,5 +86,31 @@ class OBSFileStatus extends FileStatus {
         super(length, false, 1, blockSize, modificationTime, path);
         setOwner(owner);
         setGroup(owner);
+    }
+
+    /**
+     * A simple file with etag.
+     *
+     * @param length           file length
+     * @param modificationTime mod time
+     * @param path             path
+     * @param blockSize        block size
+     * @param owner            owner
+     * @param etag             etag
+     */
+    OBSFileStatus(final long length, final long modificationTime, final Path path, final long blockSize,
+        final String owner, final String etag) {
+        this(length, modificationTime, path, blockSize, owner);
+        this.etag = etag;
+    }
+
+    public String getEtag() {
+        return this.etag;
+    }
+
+    protected void setAccessControlAttr(final String owner, final String group, final FsPermission fsPermission) {
+        super.setOwner(owner);
+        super.setGroup(group);
+        super.setPermission(fsPermission);
     }
 }

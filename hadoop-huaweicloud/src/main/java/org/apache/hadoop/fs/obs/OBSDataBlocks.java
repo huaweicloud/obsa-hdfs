@@ -23,6 +23,8 @@ import com.google.common.base.Preconditions;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSExceptionMessages;
+import org.apache.hadoop.fs.LocalDirAllocator;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.util.DirectBufferPool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,6 +40,10 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.Base64;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -55,20 +61,14 @@ final class OBSDataBlocks {
     private OBSDataBlocks() {
     }
 
-    /**
-     * Validate args to a write command. These are the same validation checks
-     * expected for any implementation of {@code OutputStream.write()}.
-     *
-     * @param b   byte array containing data
-     * @param off offset in array where to start
-     * @param len number of bytes to be written
-     * @throws NullPointerException      for a null buffer
-     * @throws IndexOutOfBoundsException if indices are out of range
-     */
     static void validateWriteArgs(final byte[] b, final int off, final int len) {
         Preconditions.checkNotNull(b);
-        if (off < 0 || off > b.length || len < 0 || off + len > b.length || off + len < 0) {
-            throw new IndexOutOfBoundsException("write (b[" + b.length + "], " + off + ", " + len + ')');
+        boolean offsetInvalid = off < 0 || off > b.length;
+        boolean lenInvalid = len < 0;
+        boolean endposInvalid = off + len > b.length || off + len < 0;
+        boolean invalid = offsetInvalid || lenInvalid || endposInvalid;
+        if (invalid) {
+            throw new IndexOutOfBoundsException(String.format(Locale.ROOT, "write (b[%d], %d, %d)", b.length, off, len));
         }
     }
 
@@ -91,6 +91,39 @@ final class OBSDataBlocks {
             default:
                 throw new IllegalArgumentException("Unsupported block buffer" + " \"" + name + '"');
         }
+    }
+
+    enum ChecksumType {
+        NONE("NONE") {
+            @Override
+            public String encode(byte[] bytes) {
+                throw new UnsupportedOperationException("Not supported when checksum type is none");
+            }
+        },
+        MD5("MD5") {
+            @Override
+            public String encode(byte[] bytes) {
+                return Base64.getEncoder().encodeToString(bytes);
+            }
+        },
+        SHA256("SHA-256") {
+            @Override
+            public String encode(byte[] bytes) {
+                return OBSCommonUtils.toHex(bytes);
+            }
+        };
+
+        private String algorithm;
+
+        ChecksumType(String algorithm) {
+            this.algorithm = algorithm;
+        }
+
+        public String getAlgorithm() {
+            return algorithm;
+        }
+
+        public abstract String encode(byte[] bytes);
     }
 
     /**
@@ -116,19 +149,33 @@ final class OBSDataBlocks {
          */
         abstract DataBlock create(long index, int limit) throws IOException;
 
-        /**
-         * Owner.
-         *
-         * @return obsFileSystem instance
-         */
         protected OBSFileSystem getOwner() {
             return owner;
         }
+
+        protected boolean calcMd5() {
+            return this.getOwner()
+                .getConf()
+                .getBoolean(OBSConstants.OUTPUT_STREAM_ATTACH_MD5, OBSConstants.DEFAULT_OUTPUT_STREAM_ATTACH_MD5);
+        }
+
+        protected ChecksumType determineChecksumType() throws IOException {
+            String type = this.getOwner()
+                .getConf()
+                .get(OBSConstants.FAST_UPLOAD_CHECKSUM_TYPE, OBSConstants.FAST_UPLOAD_CHECKSUM_TYPE_NONE);
+            if (OBSConstants.FAST_UPLOAD_CHECKSUM_TYPE_SHA256.equals(type)) {
+                return ChecksumType.SHA256;
+            } else if (OBSConstants.FAST_UPLOAD_CHECKSUM_TYPE_MD5.equals(type) || calcMd5()) {
+                return ChecksumType.MD5;
+            } else if (OBSConstants.FAST_UPLOAD_CHECKSUM_TYPE_NONE.equals(type)) {
+                return ChecksumType.NONE;
+            } else {
+                throw new IOException(String.format("Unsupported fast upload checksum type '%s'", type));
+            }
+        }
+
     }
 
-    /**
-     * This represents a block being uploaded.
-     */
     abstract static class DataBlock implements Closeable {
 
         /**
@@ -136,13 +183,38 @@ final class OBSDataBlocks {
          */
         private final long index;
 
+        private ChecksumType checksumType;
+
+        private MessageDigest digest;
+
+        private String checksum;
+
         /**
          * Dest state can be : writing/upload/closed.
          */
         private volatile DestState state = DestState.Writing;
 
-        protected DataBlock(final long dataIndex) {
+        protected DataBlock(final long dataIndex, final ChecksumType checksumType) {
             this.index = dataIndex;
+            if (checksumType == null) {
+                this.checksumType = ChecksumType.NONE;
+            } else {
+                this.checksumType = checksumType;
+            }
+
+            if (checksumType != ChecksumType.NONE) {
+                LOG.debug("init data block digest state to calculate checksum. checksumType: {}", checksumType);
+                initDigestState();
+            }
+        }
+
+        private void initDigestState() {
+            try {
+                digest = MessageDigest.getInstance(checksumType.getAlgorithm());
+            } catch (NoSuchAlgorithmException e) {
+                LOG.warn("load digest algorithm failed", e);
+                this.checksumType = ChecksumType.NONE;
+            }
         }
 
         /**
@@ -160,12 +232,6 @@ final class OBSDataBlocks {
             state = next;
         }
 
-        /**
-         * Verify that the block is in the declared state.
-         *
-         * @param expected expected state.
-         * @throws IllegalStateException if the DataBlock is in the wrong state
-         */
         protected final void verifyState(final DestState expected) throws IllegalStateException {
             if (expected != null && state != expected) {
                 throw new IllegalStateException(
@@ -173,11 +239,6 @@ final class OBSDataBlocks {
             }
         }
 
-        /**
-         * Current state.
-         *
-         * @return the current state.
-         */
         protected final DestState getState() {
             return state;
         }
@@ -186,49 +247,16 @@ final class OBSDataBlocks {
             return index;
         }
 
-        /**
-         * Return the current data size.
-         *
-         * @return the size of the data
-         */
         abstract int dataSize();
 
-        /**
-         * Predicate to verify that the block has the capacity to write the
-         * given set of bytes.
-         *
-         * @param bytes number of bytes desired to be written.
-         * @return true if there is enough space.
-         */
         abstract boolean hasCapacity(long bytes);
 
-        /**
-         * Predicate to check if there is data in the block.
-         *
-         * @return true if there is
-         */
         boolean hasData() {
             return dataSize() > 0;
         }
 
-        /**
-         * The remaining capacity in the block before it is full.
-         *
-         * @return the number of bytes remaining.
-         */
         abstract int remainingCapacity();
 
-        /**
-         * Write a series of bytes from the buffer, from the offset. Returns the
-         * number of bytes written. Only valid in the state {@code Writing}.
-         * Base class verifies the state but does no writing.
-         *
-         * @param buffer buffer
-         * @param offset offset
-         * @param length length of write
-         * @return number of bytes written
-         * @throws IOException trouble
-         */
         int write(final byte[] buffer, final int offset, final int length) throws IOException {
             verifyState(DestState.Writing);
             Preconditions.checkArgument(buffer != null, "Null buffer");
@@ -236,46 +264,43 @@ final class OBSDataBlocks {
             Preconditions.checkArgument(offset >= 0, "offset is negative");
             Preconditions.checkArgument(!(buffer.length - offset < length),
                 "buffer shorter than amount of data to write");
+            if (checksumType != ChecksumType.NONE) {
+                digest.update(buffer, offset, length);
+            }
             return 0;
         }
 
-        /**
-         * Flush the output. Only valid in the state {@code Writing}. In the
-         * base class, this is a no-op
-         *
-         * @throws IOException any IO problem.
-         */
         void flush() throws IOException {
             verifyState(DestState.Writing);
         }
 
-        /**
-         * Switch to the upload state and return a stream for uploading. Base
-         * class calls {@link #enterState(DestState, DestState)} to manage the
-         * state machine.
-         *
-         * @return the stream
-         * @throws IOException trouble
-         */
         Object startUpload() throws IOException {
             LOG.debug("Start datablock[{}] upload", index);
             enterState(DestState.Writing, DestState.Upload);
+            if (checksumType != ChecksumType.NONE) {
+                finalDigest();
+                this.digest = null;
+            }
             return null;
         }
 
-        /**
-         * Enter the closed state.
-         *
-         * @return true if the class was in any other state, implying that the
-         * subclass should do its close operations
-         */
-        protected synchronized boolean enterClosedState() {
-            if (!state.equals(DestState.Closed)) {
-                enterState(null, DestState.Closed);
-                return true;
-            } else {
-                return false;
+        private void finalDigest() {
+            if (digest == null) {
+                LOG.warn("digest is null");
             }
+            if (!getState().equals(DestState.Upload)) {
+                throw new IllegalStateException("finalDigest() should in Upload state");
+            }
+            byte[] bytes = digest.digest();
+            checksum = checksumType.encode(bytes);
+        }
+
+        public ChecksumType getChecksumType() {
+            return checksumType;
+        }
+        
+        public String getChecksum() {
+            return checksum;
         }
 
         @Override
@@ -286,62 +311,43 @@ final class OBSDataBlocks {
             }
         }
 
-        /**
-         * Inner close logic for subclasses to implement.
-         *
-         * @throws IOException on any failure to close
-         */
         protected abstract void innerClose() throws IOException;
 
-        /**
-         * Destination state definition for a data block.
-         */
+        protected synchronized boolean enterClosedState() {
+            if (!state.equals(DestState.Closed)) {
+                enterState(null, DestState.Closed);
+                return true;
+            } else {
+                return false;
+            }
+        }
+
         enum DestState {
-            /**
-             * destination state : writing.
-             */
             Writing,
-            /**
-             * destination state : upload.
-             */
             Upload,
-            /**
-             * destination state : closed.
-             */
             Closed
         }
     }
 
-    /**
-     * Use byte arrays on the heap for storage.
-     */
     static class ByteArrayBlockFactory extends BlockFactory {
         ByteArrayBlockFactory(final OBSFileSystem owner) {
             super(owner);
         }
 
         @Override
-        DataBlock create(final long index, final int limit) {
+        DataBlock create(final long index, final int limit) throws IOException {
             int firstBlockSize = super.owner.getConf()
                 .getInt(OBSConstants.FAST_UPLOAD_BUFFER_ARRAY_FIRST_BLOCK_SIZE,
                     OBSConstants.FAST_UPLOAD_BUFFER_ARRAY_FIRST_BLOCK_SIZE_DEFAULT);
-            return new ByteArrayBlock(0, limit, firstBlockSize);
+            return new ByteArrayBlock(0, limit, firstBlockSize, determineChecksumType());
         }
     }
 
-    /**
-     * OBS specific byte array output stream.
-     */
     static class OBSByteArrayOutputStream extends ByteArrayOutputStream {
         OBSByteArrayOutputStream(final int size) {
             super(size);
         }
 
-        /**
-         * InputStream backed by the internal byte array.
-         *
-         * @return input stream
-         */
         ByteArrayInputStream getInputStream() {
             ByteArrayInputStream bin = new ByteArrayInputStream(this.buf, 0, count);
             this.reset();
@@ -350,75 +356,28 @@ final class OBSDataBlocks {
         }
     }
 
-    /**
-     * Stream to memory via a {@code ByteArrayOutputStream}.
-     *
-     * <p>This was taken from {@code OBSBlockOutputStream} and has the same
-     * problem which surfaced there: it can consume a lot of heap space
-     * proportional to the mismatch between writes to the stream and the
-     * JVM-wide upload bandwidth to the OBS endpoint. The memory consumption can
-     * be limited by tuning the filesystem settings to restrict the number of
-     * queued/active uploads.
-     */
     static class ByteArrayBlock extends DataBlock {
-        /**
-         * Memory limit.
-         */
+
         private final int limit;
 
-        /**
-         * Output stream.
-         */
         private OBSByteArrayOutputStream buffer;
 
-        /**
-         * Cache data size so that it is consistent after the buffer is reset.
-         */
         private Integer dataSize;
 
-        /**
-         * Block first size.
-         */
         private int firstBlockSize;
 
-        /**
-         * Input stream.
-         */
         private ByteArrayInputStream inputStream = null;
 
-        ByteArrayBlock(final long index, final int limitBlockSize, final int blockSize) {
-            super(index);
+        ByteArrayBlock(final long index, final int limitBlockSize, final int blockSize, final ChecksumType checksumType) {
+            super(index, checksumType);
             this.limit = limitBlockSize;
             this.buffer = new OBSByteArrayOutputStream(blockSize);
             this.firstBlockSize = blockSize;
         }
 
-        /**
-         * Returns the block first block size.
-         *
-         * @return the block first block size
-         */
-        @VisibleForTesting
-        public int firstBlockSize() {
-            return this.firstBlockSize;
-        }
-
-        /**
-         * Get the amount of data; if there is no buffer then the size is 0.
-         *
-         * @return the amount of data available to upload.
-         */
         @Override
         int dataSize() {
             return dataSize != null ? dataSize : buffer.size();
-        }
-
-        @Override
-        InputStream startUpload() throws IOException {
-            super.startUpload();
-            dataSize = buffer.size();
-            inputStream = buffer.getInputStream();
-            return inputStream;
         }
 
         @Override
@@ -431,10 +390,15 @@ final class OBSDataBlocks {
             return limit - dataSize();
         }
 
+        @VisibleForTesting
+        public int firstBlockSize() {
+            return this.firstBlockSize;
+        }
+
         @Override
         int write(final byte[] b, final int offset, final int len) throws IOException {
-            super.write(b, offset, len);
             int written = Math.min(remainingCapacity(), len);
+            super.write(b, offset, written);
             buffer.write(b, offset, written);
             return written;
         }
@@ -453,26 +417,24 @@ final class OBSDataBlocks {
         }
 
         @Override
+        InputStream startUpload() throws IOException {
+            super.startUpload();
+            dataSize = buffer.size();
+            inputStream = buffer.getInputStream();
+            return inputStream;
+        }
+
+        @Override
         public String toString() {
             return "ByteArrayBlock{" + "index=" + getIndex() + ", state=" + getState() + ", limit=" + limit
                 + ", dataSize=" + dataSize + '}';
         }
     }
 
-    /**
-     * Stream via Direct ByteBuffers; these are allocated off heap via {@link
-     * DirectBufferPool}.
-     */
     static class ByteBufferBlockFactory extends BlockFactory {
 
-        /**
-         * The directory buffer pool.
-         */
         private static final DirectBufferPool BUFFER_POOL = new DirectBufferPool();
 
-        /**
-         * Count of outstanding buffers.
-         */
         private static final AtomicInteger BUFFERS_OUTSTANDING = new AtomicInteger(0);
 
         ByteBufferBlockFactory(final OBSFileSystem owner) {
@@ -480,8 +442,8 @@ final class OBSDataBlocks {
         }
 
         @Override
-        ByteBufferBlock create(final long index, final int limit) {
-            return new ByteBufferBlock(index, limit);
+        ByteBufferBlock create(final long index, final int limit) throws IOException {
+            return new ByteBufferBlock(index, limit, determineChecksumType());
         }
 
         public static ByteBuffer requestBuffer(final int limit) {
@@ -496,104 +458,41 @@ final class OBSDataBlocks {
             BUFFERS_OUTSTANDING.decrementAndGet();
         }
 
-        /**
-         * Get count of outstanding buffers.
-         *
-         * @return the current buffer count
-         */
         public int getOutstandingBufferCount() {
             return BUFFERS_OUTSTANDING.get();
         }
 
         @Override
         public String toString() {
-            return "ByteBufferBlockFactory{" + "buffersOutstanding=" + BUFFERS_OUTSTANDING + '}';
+            return String.format(Locale.ROOT, "ByteBufferBlockFactory{ buffersOutstanding = %d }", BUFFERS_OUTSTANDING.get());
         }
     }
 
-    /**
-     * A DataBlock which requests a buffer from pool on creation; returns it
-     * when it is closed.
-     */
     static class ByteBufferBlock extends DataBlock {
-        /**
-         * Set the buffer size.
-         */
+
         private final int bufferSize;
 
-        /**
-         * Create block buffer.
-         */
         private ByteBuffer blockBuffer;
 
-        /**
-         * Cache data size so that it is consistent after the buffer is reset.
-         */
         private Integer dataSize;
 
-        /**
-         * Create input stream.
-         */
         private ByteBufferInputStream inputStream;
 
-        /**
-         * Instantiate. This will request a ByteBuffer of the desired size.
-         *
-         * @param index          block index
-         * @param initBufferSize buffer size
-         */
-        ByteBufferBlock(final long index, final int initBufferSize) {
-            super(index);
+        ByteBufferBlock(final long index, final int initBufferSize, final ChecksumType checksumType) {
+            super(index, checksumType);
             this.bufferSize = initBufferSize;
             blockBuffer = ByteBufferBlockFactory.requestBuffer(initBufferSize);
         }
 
-        /**
-         * Get the amount of data; if there is no buffer then the size is 0.
-         *
-         * @return the amount of data available to upload.
-         */
-        @Override
-        int dataSize() {
-            return dataSize != null ? dataSize : bufferCapacityUsed();
-        }
-
-        @Override
-        InputStream startUpload() throws IOException {
-            super.startUpload();
-            dataSize = bufferCapacityUsed();
-            // set the buffer up from reading from the beginning
-            blockBuffer.limit(blockBuffer.position());
-            blockBuffer.position(0);
-            inputStream = new ByteBufferInputStream(dataSize, blockBuffer);
-            return inputStream;
-        }
-
-        @Override
-        public boolean hasCapacity(final long bytes) {
-            return bytes <= remainingCapacity();
-        }
-
-        @Override
-        public int remainingCapacity() {
-            return blockBuffer != null ? blockBuffer.remaining() : 0;
-        }
-
-        private int bufferCapacityUsed() {
+        private int capacityUsed() {
             return blockBuffer.capacity() - blockBuffer.remaining();
         }
 
         @Override
-        int write(final byte[] b, final int offset, final int len) throws IOException {
-            super.write(b, offset, len);
-            int written = Math.min(remainingCapacity(), len);
-            blockBuffer.put(b, offset, written);
-            return written;
+        int dataSize() {
+            return dataSize != null ? dataSize : capacityUsed();
         }
 
-        /**
-         * Closing the block will release the buffer.
-         */
         @Override
         protected void innerClose() {
             if (blockBuffer != null) {
@@ -607,26 +506,33 @@ final class OBSDataBlocks {
         }
 
         @Override
+        public int remainingCapacity() {
+            return blockBuffer != null ? blockBuffer.remaining() : 0;
+        }
+
+        @Override
+        public boolean hasCapacity(final long bytes) {
+            return bytes <= remainingCapacity();
+        }
+
+        @Override
         public String toString() {
             return "ByteBufferBlock{" + "index=" + getIndex() + ", state=" + getState() + ", dataSize=" + dataSize()
                 + ", limit=" + bufferSize + ", remainingCapacity=" + remainingCapacity() + '}';
         }
 
-        /**
-         * Provide an input stream from a byte buffer; supporting {@link
-         * #mark(int)}, which is required to enable replay of failed PUT
-         * attempts.
-         */
+        @Override
+        int write(final byte[] b, final int offset, final int len) throws IOException {
+            int written = Math.min(remainingCapacity(), len);
+            super.write(b, offset, written);
+            blockBuffer.put(b, offset, written);
+            return written;
+        }
+
         class ByteBufferInputStream extends InputStream {
 
-            /**
-             * Set the input stream size.
-             */
             private final int size;
 
-            /**
-             * Set the byte buffer.
-             */
             private ByteBuffer byteBuffer;
 
             ByteBufferInputStream(final int streamSize, final ByteBuffer streamByteBuffer) {
@@ -635,26 +541,30 @@ final class OBSDataBlocks {
                 this.byteBuffer = streamByteBuffer;
             }
 
-            /**
-             * After the stream is closed, set the local reference to the byte
-             * buffer to null; this guarantees that future attempts to use
-             * stream methods will fail.
-             */
-            @Override
-            public synchronized void close() {
-                LOG.debug("ByteBufferInputStream.close() for {}", ByteBufferBlock.super.toString());
-                byteBuffer = null;
-            }
-
-            /**
-             * Verify that the stream is open.
-             *
-             * @throws IOException if the stream is closed
-             */
             private void verifyOpen() throws IOException {
                 if (byteBuffer == null) {
                     throw new IOException(FSExceptionMessages.STREAM_IS_CLOSED);
                 }
+            }
+
+            @Override
+            public synchronized long skip(final long offset) throws IOException {
+                verifyOpen();
+                long pos = position() + offset;
+                if (pos < 0) {
+                    throw new EOFException(FSExceptionMessages.NEGATIVE_SEEK);
+                }
+                if (pos > size) {
+                    throw new EOFException(FSExceptionMessages.CANNOT_SEEK_PAST_EOF);
+                }
+                byteBuffer.position((int) pos);
+                return pos;
+            }
+
+            @Override
+            public synchronized void close() {
+                LOG.debug("ByteBufferInputStream.close() for {}", ByteBufferBlock.super.toString());
+                byteBuffer = null;
             }
 
             public synchronized int read() {
@@ -666,47 +576,17 @@ final class OBSDataBlocks {
             }
 
             @Override
-            public synchronized long skip(final long offset) throws IOException {
-                verifyOpen();
-                long newPos = position() + offset;
-                if (newPos < 0) {
-                    throw new EOFException(FSExceptionMessages.NEGATIVE_SEEK);
-                }
-                if (newPos > size) {
-                    throw new EOFException(FSExceptionMessages.CANNOT_SEEK_PAST_EOF);
-                }
-                byteBuffer.position((int) newPos);
-                return newPos;
-            }
-
-            @Override
             public synchronized int available() {
                 Preconditions.checkState(byteBuffer != null, FSExceptionMessages.STREAM_IS_CLOSED);
                 return byteBuffer.remaining();
             }
 
-            /**
-             * Get the current buffer position.
-             *
-             * @return the buffer position
-             */
             public synchronized int position() {
                 return byteBuffer.position();
             }
 
-            /**
-             * Check if there is data left.
-             *
-             * @return true if there is data remaining in the buffer.
-             */
             public synchronized boolean hasRemaining() {
                 return byteBuffer.hasRemaining();
-            }
-
-            @Override
-            public synchronized void mark(final int readlimit) {
-                LOG.debug("mark at {}", position());
-                byteBuffer.mark();
             }
 
             @Override
@@ -715,23 +595,6 @@ final class OBSDataBlocks {
                 byteBuffer.reset();
             }
 
-            @Override
-            public boolean markSupported() {
-                return true;
-            }
-
-            /**
-             * Read in data.
-             *
-             * @param b      destination buffer
-             * @param offset offset within the buffer
-             * @param length length of bytes to read
-             * @return read size
-             * @throws EOFException              if the position is negative
-             * @throws IndexOutOfBoundsException if there isn't space for the
-             *                                   amount of data requested.
-             * @throws IllegalArgumentException  other arguments are invalid.
-             */
             public synchronized int read(final byte[] b, final int offset, final int length) throws IOException {
                 Preconditions.checkArgument(length >= 0, "length is negative");
                 Preconditions.checkArgument(b != null, "Null buffer");
@@ -751,106 +614,98 @@ final class OBSDataBlocks {
             }
 
             @Override
+            public synchronized void mark(final int readLimit) {
+                LOG.debug("mark at {}", position());
+                byteBuffer.mark();
+            }
+
+            @Override
             public String toString() {
                 final StringBuilder sb = new StringBuilder("ByteBufferInputStream{");
                 sb.append("size=").append(size);
-                ByteBuffer buf = this.byteBuffer;
-                if (buf != null) {
-                    sb.append(", available=").append(buf.remaining());
+                if (this.byteBuffer != null) {
+                    sb.append(", available=").append(this.byteBuffer.remaining());
                 }
-                sb.append(", ").append(ByteBufferBlock.super.toString());
-                sb.append('}');
+                sb.append(", ").append(ByteBufferBlock.super.toString()).append('}');
                 return sb.toString();
             }
+
+            @Override
+            public boolean markSupported() {
+                return true;
+            }
+        }
+
+        @Override
+        InputStream startUpload() throws IOException {
+            super.startUpload();
+            dataSize = capacityUsed();
+            blockBuffer.limit(blockBuffer.position());
+            blockBuffer.position(0);
+            inputStream = new ByteBufferInputStream(dataSize, blockBuffer);
+            return inputStream;
         }
     }
 
-    /**
-     * Buffer blocks to disk.
-     */
     static class DiskBlockFactory extends BlockFactory {
-        /**
-         * Allocator the local directory.
-         */
-        private static OBSLocalDirAllocator directoryAllocator;
+
+        private static volatile LocalDirAllocator directoryAllocator;
 
         DiskBlockFactory(final OBSFileSystem owner) {
             super(owner);
         }
 
-        /**
-         * Create a temp file and a {@link DiskBlock} instance to manage it.
-         *
-         * @param index block index
-         * @param limit limit of the block.
-         * @return the new block
-         * @throws IOException IO problems
-         */
+        protected boolean diskForce() {
+            return this.getOwner()
+                    .getConf()
+                    .getBoolean(OBSConstants.OUTPUT_STREAM_DISK_FORCE_FLUSH , OBSConstants.DEFAULT_OUTPUT_STREAM_DISK_FORCE_FLUSH);
+        }
+
         @Override
         DataBlock create(final long index, final int limit) throws IOException {
             File destFile = createTmpFileForWrite(String.format("obs-block-%04d-", index), limit, getOwner().getConf());
-            return new DiskBlock(destFile, limit, index);
+            return new DiskBlock(destFile, limit, index, determineChecksumType(), diskForce());
         }
 
-        /**
-         * Demand create the directory allocator, then create a temporary file.
-         * {@link OBSLocalDirAllocator#createTmpFileForWrite(String, long,
-         * Configuration)}.
-         *
-         * @param pathStr prefix for the temporary file
-         * @param size    the size of the file that is going to be written
-         * @param conf    the Configuration object
-         * @return a unique temporary file
-         * @throws IOException IO problems
-         */
-        static File createTmpFileForWrite(final String pathStr, final long size, final Configuration conf)
+        static synchronized  File createTmpFileForWrite(final String pathStr, final long size, final Configuration conf)
             throws IOException {
             if (directoryAllocator == null) {
                 String bufferDir = conf.get(OBSConstants.BUFFER_DIR) != null
-                    ? OBSConstants.BUFFER_DIR
-                    : "hadoop.tmp.dir";
-                directoryAllocator = new OBSLocalDirAllocator(bufferDir);
+                        ? OBSConstants.BUFFER_DIR
+                        : "hadoop.tmp.dir";
+                directoryAllocator = new LocalDirAllocator(bufferDir);
             }
-            return directoryAllocator.createTmpFileForWrite(pathStr, size, conf);
+            Path path = directoryAllocator.getLocalPathForWrite(pathStr, size, conf);
+            File dir = new File(path.getParent().toUri().getPath());
+            String prefix = path.getName();
+            return File.createTempFile(prefix, null, dir);
         }
     }
 
-    /**
-     * Stream to a file. This will stop at the limit; the caller is expected to
-     * create a new block.
-     */
     static class DiskBlock extends DataBlock {
 
-        /**
-         * Create buffer file.
-         */
         private final File bufferFile;
 
-        /**
-         * Buffer size limit.
-         */
         private final int limit;
 
-        /**
-         * Verify block has closed or not.
-         */
         private final AtomicBoolean closed = new AtomicBoolean(false);
 
-        /**
-         * Written bytes count.
-         */
         private int bytesWritten;
 
-        /**
-         * Out put stream buffer.
-         */
-        private BufferedOutputStream out;
+        private boolean diskForce;
 
-        DiskBlock(final File destBufferFile, final int limitSize, final long index) throws FileNotFoundException {
-            super(index);
+        private BufferedOutputStream outputStream;
+
+        private FileOutputStream fileoutputstream;
+
+        DiskBlock(final File destBufferFile, final int limitSize, final long index, final ChecksumType checksumType,
+            final boolean diskForce) throws FileNotFoundException {
+            super(index, checksumType);
             this.limit = limitSize;
+            this.diskForce = diskForce;
             this.bufferFile = destBufferFile;
-            out = new BufferedOutputStream(new FileOutputStream(destBufferFile));
+            this.fileoutputstream = new FileOutputStream(destBufferFile);
+            outputStream = new BufferedOutputStream(fileoutputstream);
         }
 
         @Override
@@ -859,8 +714,12 @@ final class OBSDataBlocks {
         }
 
         @Override
-        boolean hasCapacity(final long bytes) {
-            return dataSize() + bytes <= limit;
+        int write(final byte[] b, final int offset, final int len) throws IOException {
+            int writeLen = Math.min(remainingCapacity(), len);
+            super.write(b, offset, writeLen);
+            outputStream.write(b, offset, writeLen);
+            bytesWritten += writeLen;
+            return writeLen;
         }
 
         @Override
@@ -868,79 +727,6 @@ final class OBSDataBlocks {
             return limit - bytesWritten;
         }
 
-        @Override
-        int write(final byte[] b, final int offset, final int len) throws IOException {
-            super.write(b, offset, len);
-            int written = Math.min(remainingCapacity(), len);
-            out.write(b, offset, written);
-            bytesWritten += written;
-            return written;
-        }
-
-        @Override
-        File startUpload() throws IOException {
-            super.startUpload();
-            try {
-                out.flush();
-            } finally {
-                out.close();
-                out = null;
-            }
-            return bufferFile;
-        }
-
-        /**
-         * The close operation will delete the destination file if it still
-         * exists.
-         */
-        @Override
-        protected void innerClose() {
-            final DestState state = getState();
-            LOG.debug("Closing {}", this);
-            switch (state) {
-                case Writing:
-                    if (bufferFile.exists()) {
-                        // file was not uploaded
-                        LOG.debug("Block[{}]: Deleting buffer file as upload " + "did not start", getIndex());
-                        closeBlock();
-                    }
-                    break;
-
-                case Upload:
-                    LOG.debug("Block[{}]: Buffer file {} exists —close upload stream", getIndex(), bufferFile);
-                    break;
-
-                case Closed:
-                    closeBlock();
-                    break;
-
-                default:
-                    // this state can never be reached, but checkstyle
-                    // complains, so it is here.
-            }
-        }
-
-        /**
-         * Flush operation will flush to disk.
-         *
-         * @throws IOException IOE raised on FileOutputStream
-         */
-        @Override
-        void flush() throws IOException {
-            super.flush();
-            out.flush();
-        }
-
-        @Override
-        public String toString() {
-            return "FileBlock{index=" + getIndex() + ", destFile=" + bufferFile + ", state=" + getState()
-                + ", dataSize=" + dataSize() + ", limit=" + limit + '}';
-        }
-
-        /**
-         * Close the block. This will delete the block's buffer file if the
-         * block has not previously been closed.
-         */
         void closeBlock() {
             LOG.debug("block[{}]: closeBlock()", getIndex());
             if (!closed.getAndSet(true)) {
@@ -950,6 +736,64 @@ final class OBSDataBlocks {
             } else {
                 LOG.debug("block[{}]: skipping re-entrant closeBlock()", getIndex());
             }
+        }
+
+        @Override
+        protected void innerClose() {
+            final DestState state = getState();
+            LOG.debug("Closing {}", this);
+            switch (state) {
+                case Closed:
+                    closeBlock();
+                    break;
+
+                case Upload:
+                    LOG.debug("Block[{}]: Buffer file {} exists —close upload stream", getIndex(), bufferFile);
+                    break;
+
+                case Writing:
+                    if (bufferFile.exists()) {
+                        LOG.debug("Block[{}]: Deleting buffer file as upload did not start", getIndex());
+                        closeBlock();
+                    }
+                    break;
+
+                default:
+
+            }
+        }
+
+        @Override
+        File startUpload() throws IOException {
+            super.startUpload();
+            try {
+                outputStream.flush();
+                if (diskForce) {
+                    fileoutputstream.getChannel().force(true);
+                }
+
+            } finally {
+                outputStream.close();
+                outputStream = null;
+            }
+            return bufferFile;
+        }
+
+        @Override
+        public String toString() {
+            return "FileBlock{index=" + getIndex() + ", destFile=" + bufferFile + ", state=" + getState()
+                + ", dataSize=" + dataSize() + ", limit=" + limit + '}';
+        }
+
+        @Override
+        void flush() throws IOException {
+            super.flush();
+            outputStream.flush();
+        }
+
+        @Override
+        boolean hasCapacity(final long bytes) {
+            return dataSize() + bytes <= limit;
         }
     }
 }

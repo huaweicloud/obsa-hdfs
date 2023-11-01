@@ -35,6 +35,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -62,7 +64,9 @@ class OBSWriteOperationHelper {
     /**
      * Class logger.
      */
-    public static final Logger LOG = LoggerFactory.getLogger(OBSWriteOperationHelper.class);
+    private static final Logger LOG = LoggerFactory.getLogger(OBSWriteOperationHelper.class);
+
+    static final String CONTENT_SHA256 = "x-obs-content-sha256";
 
     /**
      * Part number of the multipart task.
@@ -94,13 +98,19 @@ class OBSWriteOperationHelper {
      * Create a {@link PutObjectRequest} request. If {@code length} is set, the
      * metadata is configured with the size of the upload.
      *
-     * @param destKey     key of object
+     * @param destKey key of object
      * @param inputStream source data
-     * @param length      size, if known. Use -1 for not known
+     * @param length size, if known. Use -1 for not known
+     * @param type checksum type
+     * @param checksum checksum for source data
      * @return the request
      */
-    PutObjectRequest newPutRequest(final String destKey, final InputStream inputStream, final long length) {
-        return OBSCommonUtils.newPutObjectRequest(owner, destKey, newObjectMetadata(length), inputStream);
+    PutObjectRequest newPutRequest(final String destKey, final InputStream inputStream, final long length,
+        OBSDataBlocks.ChecksumType type, final String checksum) {
+        PutObjectRequest request =
+            OBSCommonUtils.newPutObjectRequest(owner, destKey, newObjectMetadata(length), inputStream);
+        setPutObjectRequestChecksumInfo(request, type, checksum);
+        return request;
     }
 
     /**
@@ -108,11 +118,31 @@ class OBSWriteOperationHelper {
      *
      * @param destKey    object key for request
      * @param sourceFile source file
+     * @param type checksum type
+     * @param checksum checksum for source data
      * @return the request
      */
-    PutObjectRequest newPutRequest(final String destKey, final File sourceFile) {
+    PutObjectRequest newPutRequest(final String destKey, final File sourceFile, OBSDataBlocks.ChecksumType type,
+        final String checksum) throws FileNotFoundException {
         int length = (int) sourceFile.length();
-        return OBSCommonUtils.newPutObjectRequest(owner, destKey, newObjectMetadata(length), sourceFile);
+        PutObjectRequest request =
+            OBSCommonUtils.newPutObjectRequest(owner, destKey, newObjectMetadata(length), sourceFile);
+        setPutObjectRequestChecksumInfo(request, type, checksum);
+        return request;
+    }
+
+    private static void setPutObjectRequestChecksumInfo(PutObjectRequest request, OBSDataBlocks.ChecksumType type,
+        String checksum) {
+        switch (type) {
+            case MD5:
+                request.getMetadata().setContentMd5(checksum);
+                break;
+            case SHA256:
+                request.addUserHeaders(CONTENT_SHA256, checksum);
+                break;
+            default:
+                break;
+        }
     }
 
     /**
@@ -152,11 +182,10 @@ class OBSWriteOperationHelper {
         } else if (owner.getSse().isSseKmsEnable()) {
             initiateMPURequest.setSseKmsHeader(owner.getSse().getSseKmsHeader());
         }
-        try {
+        return OBSCommonUtils.getOBSInvoker().retryByMaxTime(OBSOperateAction.initMultiPartUpload,
+            destKey, () -> {
             return obs.initiateMultipartUpload(initiateMPURequest).getUploadId();
-        } catch (ObsException ace) {
-            throw OBSCommonUtils.translateException("Initiate MultiPartUpload", destKey, ace);
-        }
+        },true);
     }
 
     /**
@@ -169,15 +198,18 @@ class OBSWriteOperationHelper {
      * @throws ObsException on problems.
      */
     CompleteMultipartUploadResult completeMultipartUpload(final String destKey, final String uploadId,
-        final List<PartEtag> partETags) throws ObsException {
+        final List<PartEtag> partETags) throws IOException {
         Preconditions.checkNotNull(uploadId);
         Preconditions.checkNotNull(partETags);
         Preconditions.checkArgument(!partETags.isEmpty(), "No partitions have been uploaded");
         LOG.debug("Completing multipart upload {} with {} parts", uploadId, partETags.size());
         // a copy of the list is required, so that the OBS SDK doesn't
         // attempt to sort an unmodifiable list.
-        return obs.completeMultipartUpload(
-            new CompleteMultipartUploadRequest(bucket, destKey, uploadId, new ArrayList<>(partETags)));
+        return OBSCommonUtils.getOBSInvoker().retryByMaxTime(OBSOperateAction.completeMultipartUpload,
+            destKey, () -> {
+                return obs.completeMultipartUpload(
+                    new CompleteMultipartUploadRequest(bucket, destKey, uploadId, new ArrayList<>(partETags)));
+            },true);
     }
 
     /**
@@ -195,47 +227,39 @@ class OBSWriteOperationHelper {
     /**
      * Create request for uploading one part of a multipart task.
      *
-     * @param destKey    destination object key
-     * @param uploadId   upload id
+     * @param destKey destination object key
+     * @param uploadId upload id
      * @param partNumber part number
-     * @param size       data size
+     * @param size data size
      * @param sourceFile source file to be uploaded
+     * @param type checksum type
+     * @param checksum checksum for source data
      * @return part upload request
      */
     UploadPartRequest newUploadPartRequest(final String destKey, final String uploadId, final int partNumber,
-        final int size, final File sourceFile) {
-        Preconditions.checkNotNull(uploadId);
-
+        final int size, final File sourceFile, OBSDataBlocks.ChecksumType type, final String checksum)
+        throws FileNotFoundException {
         Preconditions.checkArgument(sourceFile != null, "Data source");
-        Preconditions.checkArgument(size > 0, "Invalid partition size %s", size);
-        Preconditions.checkArgument(partNumber > 0 && partNumber <= PART_NUMBER);
-
-        LOG.debug("Creating part upload request for {} #{} size {}", uploadId, partNumber, size);
-        UploadPartRequest request = new UploadPartRequest();
-        request.setUploadId(uploadId);
-        request.setBucketName(bucket);
-        request.setObjectKey(destKey);
-        request.setPartSize((long) size);
-        request.setPartNumber(partNumber);
-        request.setFile(sourceFile);
-        if (owner.getSse().isSseCEnable()) {
-            request.setSseCHeader(owner.getSse().getSseCHeader());
-        }
+        UploadPartRequest request =
+            newUploadPartRequest(destKey, uploadId, partNumber, size, new FileInputStream(sourceFile), type, checksum);
+        request.setAutoClose(false);
         return request;
     }
 
     /**
      * Create request for uploading one part of a multipart task.
      *
-     * @param destKey      destination object key
-     * @param uploadId     upload id
-     * @param partNumber   part number
-     * @param size         data size
+     * @param destKey destination object key
+     * @param uploadId upload id
+     * @param partNumber part number
+     * @param size data size
      * @param uploadStream upload stream for the part
+     * @param type checksum type
+     * @param checksum checksum for source data
      * @return part upload request
      */
     UploadPartRequest newUploadPartRequest(final String destKey, final String uploadId, final int partNumber,
-        final int size, final InputStream uploadStream) {
+        final int size, final InputStream uploadStream, final OBSDataBlocks.ChecksumType type, final String checksum) {
         Preconditions.checkNotNull(uploadId);
 
         Preconditions.checkArgument(uploadStream != null, "Data source");
@@ -253,6 +277,16 @@ class OBSWriteOperationHelper {
         if (owner.getSse().isSseCEnable()) {
             request.setSseCHeader(owner.getSse().getSseCHeader());
         }
+        switch (type) {
+            case MD5:
+                request.setContentMd5(checksum);
+                break;
+            case SHA256:
+                request.addUserHeaders(CONTENT_SHA256, checksum);
+                break;
+            default:
+                break;
+        }
         return request;
     }
 
@@ -268,10 +302,6 @@ class OBSWriteOperationHelper {
      * @throws IOException on problems
      */
     PutObjectResult putObject(final PutObjectRequest putObjectRequest) throws IOException {
-        try {
-            return OBSCommonUtils.putObjectDirect(owner, putObjectRequest);
-        } catch (ObsException e) {
-            throw OBSCommonUtils.translateException("put", putObjectRequest.getObjectKey(), e);
-        }
+        return OBSCommonUtils.putObjectDirect(owner, putObjectRequest);
     }
 }

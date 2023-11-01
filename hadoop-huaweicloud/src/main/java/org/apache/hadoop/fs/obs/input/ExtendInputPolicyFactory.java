@@ -6,6 +6,7 @@ import org.apache.hadoop.fs.FSInputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.obs.OBSCommonUtils;
 import org.apache.hadoop.fs.obs.OBSConstants;
+import org.apache.hadoop.fs.obs.OBSFileStatus;
 import org.apache.hadoop.fs.obs.OBSFileSystem;
 import org.apache.hadoop.fs.obs.SemaphoredDelegatingExecutor;
 
@@ -28,7 +29,7 @@ public class ExtendInputPolicyFactory implements InputPolicyFactory {
      */
     @Override
     public FSInputStream create(final OBSFileSystem obsFileSystem, String bucket, String key, Long contentLength,
-        FileSystem.Statistics statistics, ListeningExecutorService boundedThreadPool) {
+        FileSystem.Statistics statistics, ListeningExecutorService boundedThreadPool, OBSFileStatus fileStatus) {
 
         int maxReadAhead = OBSCommonUtils.intOption(obsFileSystem.getConf(), OBSConstants.READAHEAD_MAX_NUM,
             OBSConstants.DEFAULT_READAHEAD_MAX_NUM, 1);

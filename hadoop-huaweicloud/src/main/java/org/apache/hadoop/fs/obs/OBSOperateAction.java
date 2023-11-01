@@ -1,0 +1,32 @@
+package org.apache.hadoop.fs.obs;
+
+public enum OBSOperateAction {
+    getFileStatus,
+    rename,
+    delete,
+    getBucketFsStatus,
+    listObjects,
+    isFolderEmpty,
+    onReadFailure,
+    createEmptyObject,
+    createFolder,
+    truncate,
+    readOneByte,
+    readByteBuff,
+    readbytes,
+    readrandom,
+    readfully,
+    lazySeek,
+    putObject,
+    write,
+    uploadPart,
+    initMultiPartUpload,
+    completeMultipartUpload,
+    copyFile,
+    appendFile,
+    getContentSummaryFs,
+    listContentSummaryFs,
+    initialize,
+    getObjectMetadata,
+    setObjectMetadata
+}

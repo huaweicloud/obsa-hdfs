@@ -28,7 +28,7 @@ import java.util.concurrent.ExecutorService;
  * stream.
  */
 public class OBSExtendInputStream extends FSInputStream implements CanSetReadahead, ByteBufferReadable {
-    public static final Logger LOG = LoggerFactory.getLogger(OBSExtendInputStream.class);
+    private static final Logger LOG = LoggerFactory.getLogger(OBSExtendInputStream.class);
 
     private OBSFileSystem fs;
 
@@ -218,9 +218,7 @@ public class OBSExtendInputStream extends FSInputStream implements CanSetReadahe
     }
 
     private void validateReadArgs(byte[] buf, int off, int len) {
-        if (buf == null) {
-            throw new NullPointerException();
-        } else if (off < 0 || len < 0 || len > buf.length - off) {
+        if (off < 0 || len < 0 || len > buf.length - off) {
             throw new IndexOutOfBoundsException();
         }
     }

@@ -22,7 +22,7 @@ import java.util.concurrent.TimeUnit;
  * we can accelerate the sequential read.
  */
 public class ReadAheadTask implements Runnable {
-    public final Logger log = LoggerFactory.getLogger(ReadAheadTask.class);
+    private static final Logger log = LoggerFactory.getLogger(ReadAheadTask.class);
 
     private String bucketName;
 

@@ -88,31 +88,6 @@ public class SemaphoredDelegatingExecutor extends ForwardingListeningExecutorSer
 
     @NotNull
     @Override
-    public <T> List<Future<T>> invokeAll(@NotNull final Collection<? extends Callable<T>> tasks) {
-        throw new RuntimeException("Not implemented");
-    }
-
-    @NotNull
-    @Override
-    public <T> List<Future<T>> invokeAll(@NotNull final Collection<? extends Callable<T>> tasks, final long timeout,
-        @NotNull final TimeUnit unit) {
-        throw new RuntimeException("Not implemented");
-    }
-
-    @NotNull
-    @Override
-    public <T> T invokeAny(@NotNull final Collection<? extends Callable<T>> tasks) {
-        throw new RuntimeException("Not implemented");
-    }
-
-    @Override
-    public <T> T invokeAny(@NotNull final Collection<? extends Callable<T>> tasks, final long timeout,
-        @NotNull final TimeUnit unit) {
-        throw new RuntimeException("Not implemented");
-    }
-
-    @NotNull
-    @Override
     public <T> ListenableFuture<T> submit(@NotNull final Callable<T> task) {
         try {
             queueingPermits.acquire();
@@ -121,6 +96,31 @@ public class SemaphoredDelegatingExecutor extends ForwardingListeningExecutorSer
             return Futures.immediateFailedCheckedFuture(e);
         }
         return super.submit(new CallableWithPermitRelease<>(task));
+    }
+
+    @NotNull
+    @Override
+    public <T> List<Future<T>> invokeAll(@NotNull final Collection<? extends Callable<T>> tasks) {
+        throw new UnsupportedOperationException("Not implemented");
+    }
+
+    @NotNull
+    @Override
+    public <T> List<Future<T>> invokeAll(@NotNull final Collection<? extends Callable<T>> tasks, final long timeout,
+        @NotNull final TimeUnit unit) {
+        throw new UnsupportedOperationException("Not implemented");
+    }
+
+    @NotNull
+    @Override
+    public <T> T invokeAny(@NotNull final Collection<? extends Callable<T>> tasks) {
+        throw new UnsupportedOperationException("Not implemented");
+    }
+
+    @Override
+    public <T> T invokeAny(@NotNull final Collection<? extends Callable<T>> tasks, final long timeout,
+        @NotNull final TimeUnit unit) {
+        throw new UnsupportedOperationException("Not implemented");
     }
 
     @NotNull
@@ -135,16 +135,8 @@ public class SemaphoredDelegatingExecutor extends ForwardingListeningExecutorSer
         return super.submit(new RunnableWithPermitRelease(task), result);
     }
 
-    @NotNull
-    @Override
-    public ListenableFuture<?> submit(@NotNull final Runnable task) {
-        try {
-            queueingPermits.acquire();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return Futures.immediateFailedCheckedFuture(e);
-        }
-        return super.submit(new RunnableWithPermitRelease(task));
+    public int getAvailablePermits() {
+        return queueingPermits.availablePermits();
     }
 
     @Override
@@ -157,32 +149,24 @@ public class SemaphoredDelegatingExecutor extends ForwardingListeningExecutorSer
         super.execute(new RunnableWithPermitRelease(command));
     }
 
-    /**
-     * Get the number of permits available; guaranteed to be {@code 0 <=
-     * availablePermits <= size}.
-     *
-     * @return the number of permits available at the time of invocation.
-     */
-    public int getAvailablePermits() {
-        return queueingPermits.availablePermits();
-    }
-
-    /**
-     * Get the number of threads waiting to acquire a permit.
-     *
-     * @return snapshot of the length of the queue of blocked threads.
-     */
     public int getWaitingCount() {
         return queueingPermits.getQueueLength();
     }
 
-    /**
-     * Total number of permits.
-     *
-     * @return the number of permits as set in the constructor
-     */
     public int getPermitCount() {
         return permitCount;
+    }
+
+    @NotNull
+    @Override
+    public ListenableFuture<?> submit(@NotNull final Runnable task) {
+        try {
+            queueingPermits.acquire();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return Futures.immediateFailedCheckedFuture(e);
+        }
+        return super.submit(new RunnableWithPermitRelease(task));
     }
 
     @Override

@@ -112,7 +112,7 @@ public class OBSHDFSFileSystem extends DistributedFileSystem {
                     if (pathPrefix.endsWith(Path.SEPARATOR) && !pathPrefix.trim().equals(Path.SEPARATOR)) {
                         pathPrefix = pathPrefix.substring(0, pathPrefix.length() - 1);
                     }
-                    mountList.add(new Pair(pathPrefix, si.getValue()));
+                    mountList.add(new Pair<>(pathPrefix, si.getValue()));
                 }
             }
         }
@@ -264,9 +264,10 @@ public class OBSHDFSFileSystem extends DistributedFileSystem {
     public void initialize(URI theUri, Configuration conf) throws IOException {
         this.wrapperConf = new Configuration(conf);
         wrapperConf.set("fs.hdfs.impl", DistributedFileSystem.class.getName());
+        wrapperConf.setBoolean("fs.hdfs.impl.disable.cache", true);
 
         super.initialize(theUri, conf);
-        underHDFS = (DistributedFileSystem) FileSystem.newInstance(theUri, wrapperConf);
+        underHDFS = (DistributedFileSystem) FileSystem.get(theUri, wrapperConf);
 
         final String authority = theUri.getAuthority();
         mountMap = new HashMap<>();
@@ -531,9 +532,9 @@ public class OBSHDFSFileSystem extends DistributedFileSystem {
 
     @Override
     public RemoteIterator<LocatedFileStatus> listFiles(Path f, boolean recursive)
-        throws FileNotFoundException, IOException {
+        throws IOException {
         TransferedPath newPath = transferToNewPath(f);
-        return new WrappedRemoteIterator<LocatedFileStatus>(newPath.getFS().listFiles(newPath.toPath(), recursive),
+        return new WrappedRemoteIterator<>(newPath.getFS().listFiles(newPath.toPath(), recursive),
             fileStatus -> {
                 Path originPath = transferToWrappedPath(fileStatus.getPath(), newPath);
                 fileStatus.setPath(originPath);
@@ -544,7 +545,7 @@ public class OBSHDFSFileSystem extends DistributedFileSystem {
     @Override
     public RemoteIterator<LocatedFileStatus> listLocatedStatus(Path p, final PathFilter filter) throws IOException {
         TransferedPath newPath = transferToNewPath(p);
-        return new WrappedRemoteIterator<LocatedFileStatus>(newPath.getFS().listLocatedStatus(newPath.toPath()),
+        return new WrappedRemoteIterator<>(newPath.getFS().listLocatedStatus(newPath.toPath()),
             fileStatus -> {
                 Path originPath = transferToWrappedPath(fileStatus.getPath(), newPath);
                 fileStatus.setPath(originPath);
@@ -555,7 +556,7 @@ public class OBSHDFSFileSystem extends DistributedFileSystem {
     @Override
     public RemoteIterator<FileStatus> listStatusIterator(Path p) throws IOException {
         TransferedPath newPath = transferToNewPath(p);
-        return new WrappedRemoteIterator<FileStatus>(newPath.getFS().listStatusIterator(newPath.toPath()),
+        return new WrappedRemoteIterator<>(newPath.getFS().listStatusIterator(newPath.toPath()),
             fileStatus -> {
                 Path originPath = transferToWrappedPath(fileStatus.getPath(), newPath);
                 fileStatus.setPath(originPath);
@@ -617,7 +618,7 @@ public class OBSHDFSFileSystem extends DistributedFileSystem {
     @Override
     public RemoteIterator<Path> listCorruptFileBlocks(Path path) throws IOException {
         TransferedPath newPath = transferToNewPath(path);
-        return new WrappedRemoteIterator<Path>(newPath.getFS().listCorruptFileBlocks(newPath.toPath()),
+        return new WrappedRemoteIterator<>(newPath.getFS().listCorruptFileBlocks(newPath.toPath()),
             p -> transferToWrappedPath(p, newPath));
     }
 
@@ -802,7 +803,7 @@ public class OBSHDFSFileSystem extends DistributedFileSystem {
         }
     }
 
-    private static class WrappedRemoteIterator<T> implements RemoteIterator {
+    private static class WrappedRemoteIterator<T> implements RemoteIterator<T> {
 
         private final RemoteIterator<T> origin;
 
@@ -819,7 +820,7 @@ public class OBSHDFSFileSystem extends DistributedFileSystem {
         }
 
         @Override
-        public Object next() throws IOException {
+        public T next() throws IOException {
             return convertFunc.apply(origin.next());
         }
     }
@@ -919,6 +920,8 @@ public class OBSHDFSFileSystem extends DistributedFileSystem {
     }
 
     static class UncheckException extends RuntimeException {
+        static final long serialVersionUID = 5746198432791324945L;
+
         public UncheckException(IOException origin) {
             super(origin);
         }

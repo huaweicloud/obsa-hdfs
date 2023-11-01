@@ -20,21 +20,16 @@ package org.apache.hadoop.fs.obs;
 
 import com.obs.services.IObsCredentialsProvider;
 import com.obs.services.ObsClient;
-import com.obs.services.ObsConfiguration;
 import com.obs.services.internal.ext.ExtObsConfiguration;
 import com.obs.services.model.AuthTypeEnum;
 
-import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationTargetException;
 import java.net.URI;
-import java.util.Optional;
 
 /**
  * The default factory implementation, which calls the OBS SDK to configure and
@@ -73,6 +68,9 @@ class DefaultOBSClientFactory extends Configured implements OBSClientFactory {
             }
             conf.set(OBSConstants.ENDPOINT, newEndPointWithSchema);
         }
+
+        String endPoint = conf.getTrimmed(OBSConstants.ENDPOINT, "");
+        obsConf.setEndPoint(endPoint);
 
         obsConf.setMaxErrorRetry(
             OBSCommonUtils.intOption(conf, OBSConstants.MAX_ERROR_RETRIES, OBSConstants.DEFAULT_MAX_ERROR_RETRIES, 0));
@@ -181,119 +179,6 @@ class DefaultOBSClientFactory extends Configured implements OBSClientFactory {
         }
     }
 
-    /**
-     * Creates an {@link ObsClient} from the established configuration.
-     *
-     * @param conf    Hadoop configuration
-     * @param obsConf ObsConfiguration
-     * @param name    URL
-     * @return ObsClient client
-     * @throws IOException on any failure to create Huawei OBS client
-     */
-    private static ObsClient createHuaweiObsClient(final Configuration conf, final ObsConfiguration obsConf,
-        final URI name) throws IOException {
-        Class<?> credentialsProviderClass;
-        BasicSessionCredential credentialsProvider;
-        ObsClient obsClient;
-
-        try {
-            credentialsProviderClass = conf.getClass(OBSConstants.OBS_CREDENTIALS_PROVIDER, null);
-        } catch (RuntimeException e) {
-            Throwable c = e.getCause() != null ? e.getCause() : e;
-            throw new IOException("From option " + OBSConstants.OBS_CREDENTIALS_PROVIDER + ' ' + c, c);
-        }
-
-        if (credentialsProviderClass == null) {
-            return createObsClientWithoutCredentialsProvider(conf, obsConf, name);
-        }
-
-        try {
-            Constructor<?> cons = credentialsProviderClass.getDeclaredConstructor(URI.class, Configuration.class);
-            credentialsProvider = (BasicSessionCredential) cons.newInstance(name, conf);
-        } catch (NoSuchMethodException | SecurityException | IllegalAccessException | InstantiationException | InvocationTargetException e) {
-            Throwable c = e.getCause() != null ? e.getCause() : e;
-            throw new IOException("From option " + OBSConstants.OBS_CREDENTIALS_PROVIDER + ' ' + c, c);
-        }
-
-        LOG.info("create ObsClient using credentialsProvider: {}", credentialsProviderClass.getName());
-        String sessionToken = credentialsProvider.getSessionToken();
-        String ak = credentialsProvider.getOBSAccessKeyId();
-        String sk = credentialsProvider.getOBSSecretKey();
-        String endPoint = conf.getTrimmed(OBSConstants.ENDPOINT, "");
-        obsConf.setEndPoint(endPoint);
-        if (sessionToken != null && sessionToken.length() != 0) {
-            obsClient = new ObsClient(ak, sk, sessionToken, obsConf);
-        } else {
-            obsClient = new ObsClient(ak, sk, obsConf);
-        }
-        return obsClient;
-    }
-
-    private static ObsClient createObsClientWithoutCredentialsProvider(final Configuration conf,
-        final ObsConfiguration obsConf, final URI name) throws IOException {
-        ObsClient obsClient;
-        OBSLoginHelper.Login creds = OBSCommonUtils.getOBSAccessKeys(name, conf);
-
-        String ak = creds.getUser();
-        String sk = creds.getPassword();
-        String token = creds.getToken();
-
-        String endPoint = conf.getTrimmed(OBSConstants.ENDPOINT, "");
-        obsConf.setEndPoint(endPoint);
-
-        if (!StringUtils.isEmpty(ak) || !StringUtils.isEmpty(sk)) {
-            LOG.info("create ObsClient using aksk from configuration");
-            obsClient = new ObsClient(ak, sk, token, obsConf);
-            return obsClient;
-        }
-
-        Class<?> securityProviderClass;
-        try {
-            securityProviderClass = conf.getClass(OBSConstants.OBS_SECURITY_PROVIDER, null);
-            LOG.info("From option {} get {}", OBSConstants.OBS_SECURITY_PROVIDER, securityProviderClass);
-        } catch (RuntimeException e) {
-            Throwable c = e.getCause() != null ? e.getCause() : e;
-            throw new IOException("From option " + OBSConstants.OBS_SECURITY_PROVIDER + ' ' + c, c);
-        }
-
-        if (securityProviderClass == null) {
-            LOG.info("create ObsClient when securityProviderClass is null");
-            obsClient = new ObsClient(ak, sk, token, obsConf);
-            return obsClient;
-        }
-
-        LOG.info("create ObsClient using securityProvider {}", securityProviderClass.getName());
-        IObsCredentialsProvider securityProvider;
-        try {
-            Optional<Constructor> cons = tryGetConstructor(securityProviderClass,
-                new Class[] {URI.class, Configuration.class});
-
-            if (cons.isPresent()) {
-                securityProvider = (IObsCredentialsProvider) cons.get().newInstance(name, conf);
-            } else {
-                securityProvider = (IObsCredentialsProvider) securityProviderClass.getDeclaredConstructor()
-                    .newInstance();
-            }
-
-        } catch (NoSuchMethodException | IllegalAccessException | InstantiationException | InvocationTargetException | RuntimeException e) {
-            Throwable c = e.getCause() != null ? e.getCause() : e;
-            throw new IOException("From option " + OBSConstants.OBS_SECURITY_PROVIDER + ' ' + c, c);
-        }
-        obsClient = new ObsClient(securityProvider, obsConf);
-
-        return obsClient;
-    }
-
-    public static Optional<Constructor> tryGetConstructor(final Class mainClss, final Class[] args) {
-        try {
-            Constructor constructor = mainClss.getDeclaredConstructor(args);
-            return Optional.ofNullable(constructor);
-        } catch (NoSuchMethodException e) {
-            // ignore
-            return Optional.empty();
-        }
-    }
-
     @Override
     public ObsClient createObsClient(final URI name) throws IOException {
         Configuration conf = getConf();
@@ -301,6 +186,7 @@ class DefaultOBSClientFactory extends Configured implements OBSClientFactory {
         initConnectionSettings(conf, obsConf);
         initProxySupport(conf, obsConf);
 
-        return createHuaweiObsClient(conf, obsConf, name);
+        IObsCredentialsProvider securityProvider = OBSSecurityProviderUtil.createObsSecurityProvider(conf, name);
+        return new ObsClient(securityProvider, obsConf);
     }
 }

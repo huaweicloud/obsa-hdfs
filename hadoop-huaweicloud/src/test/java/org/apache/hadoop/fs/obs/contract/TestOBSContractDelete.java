@@ -16,31 +16,33 @@
  * limitations under the License.
  */
 
-package org.apache.hadoop.fs.obs;
+package org.apache.hadoop.fs.obs.contract;
 
-import com.obs.services.ObsClient;
-
-import org.apache.hadoop.classification.InterfaceAudience;
-import org.apache.hadoop.classification.InterfaceStability;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.contract.AbstractContractDeleteTest;
+import org.apache.hadoop.fs.contract.AbstractFSContract;
+import org.apache.hadoop.fs.obs.OBSFSTestUtil;
+import org.apache.hadoop.fs.obs.OBSTestRule;
+import org.junit.AfterClass;
+import org.junit.Rule;
 
 import java.io.IOException;
-import java.net.URI;
 
 /**
- * Factory for creating OBS client instance to be used by {@link
- * OBSFileSystem}.
+ * Delete test cases on obs file system.
  */
-@InterfaceAudience.Private
-@InterfaceStability.Unstable
-interface OBSClientFactory {
-    /**
-     * Creates a new {@link ObsClient} client. This method accepts the OBS file
-     * system URI both in raw input form and validated form as separate
-     * arguments, because both values may be useful in logging.
-     *
-     * @param name raw input OBS file system URI
-     * @return OBS client
-     * @throws IOException IO problem
-     */
-    ObsClient createObsClient(URI name) throws IOException;
+public class TestOBSContractDelete extends AbstractContractDeleteTest {
+
+    @Rule
+    public OBSTestRule testRule = new OBSTestRule();
+
+    @Override
+    protected AbstractFSContract createContract(final Configuration conf) {
+        return new OBSContract(conf);
+    }
+
+    @AfterClass
+    public static void clearBucket() throws IOException {
+        OBSFSTestUtil.clearBucket();
+    }
 }

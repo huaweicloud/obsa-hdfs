@@ -18,9 +18,6 @@
 
 package org.apache.hadoop.fs.obs;
 
-import static org.apache.commons.lang.StringUtils.equalsIgnoreCase;
-
-import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -151,7 +148,7 @@ final class OBSLoginHelper {
             }
         } catch (UnsupportedEncodingException e) {
             // this should never happen; translate it if it does.
-            throw new RuntimeException(e);
+            throw new IllegalArgumentException(e);
         }
     }
 
@@ -216,13 +213,13 @@ final class OBSLoginHelper {
         URI thisUri = canonicalizeUri(fsUri, defaultPort);
         String thisScheme = thisUri.getScheme();
         // hostname and scheme are not case sensitive in these checks
-        if (equalsIgnoreCase(thisScheme, thatScheme)) { // schemes match
+        if (OBSCommonUtils.stringEqualsIgnoreCase(thisScheme, thatScheme)) { // schemes match
             String thisHost = thisUri.getHost();
             String thatHost = pathUri.getHost();
             if (thatHost == null && // path's host is null
                 thisHost != null) { // fs has a host
                 URI defaultUri = FileSystem.getDefaultUri(conf);
-                if (equalsIgnoreCase(thisScheme, defaultUri.getScheme())) {
+                if (OBSCommonUtils.stringEqualsIgnoreCase(thisScheme, defaultUri.getScheme())) {
                     pathUri = defaultUri; // schemes match, so use this uri instead
                 } else {
                     pathUri = null; // can't determine auth of the path
@@ -232,7 +229,7 @@ final class OBSLoginHelper {
                 // canonicalize uri before comparing with this fs
                 pathUri = canonicalizeUri(pathUri, defaultPort);
                 thatHost = pathUri.getHost();
-                if (equalsIgnoreCase(thisHost, thatHost)) {
+                if (OBSCommonUtils.stringEqualsIgnoreCase(thisHost, thatHost)) {
                     return;
                 }
             }
@@ -289,7 +286,7 @@ final class OBSLoginHelper {
          * @return true if the username is defined (not null, not empty).
          */
         public boolean hasLogin() {
-            return StringUtils.isNotEmpty(user);
+            return OBSCommonUtils.isStringNotEmpty(user);
         }
 
         /**

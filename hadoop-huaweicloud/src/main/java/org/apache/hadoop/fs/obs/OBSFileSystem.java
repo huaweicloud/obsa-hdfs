@@ -23,12 +23,25 @@ import com.google.common.util.concurrent.ListeningExecutorService;
 import com.obs.services.ObsClient;
 import com.obs.services.exception.ObsException;
 import com.obs.services.model.AccessControlList;
+import com.obs.services.model.select.CsvInput;
+import com.obs.services.model.select.CsvOutput;
+import com.obs.services.model.select.ExpressionType;
+import com.obs.services.model.select.FileHeaderInfo;
+import com.obs.services.model.select.InputSerialization;
+import com.obs.services.model.select.JsonInput;
+import com.obs.services.model.select.JsonOutput;
+import com.obs.services.model.select.JsonType;
+import com.obs.services.model.select.OrcInput;
+import com.obs.services.model.select.OutputSerialization;
+import com.obs.services.model.select.ScanRange;
+import com.obs.services.model.select.SelectObjectRequest;
+import com.obs.services.model.select.SelectObjectResult;
 
-import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.HadoopIllegalArgumentException;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.fs.ContentSummary;
 import org.apache.hadoop.fs.CreateFlag;
 import org.apache.hadoop.fs.FSDataInputStream;
@@ -43,15 +56,20 @@ import org.apache.hadoop.fs.ParentNotDirectoryException;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.PathFilter;
 import org.apache.hadoop.fs.RemoteIterator;
+import org.apache.hadoop.fs.obs.input.OBSInputStream;
 import org.apache.hadoop.fs.obs.input.InputPolicyFactory;
 import org.apache.hadoop.fs.obs.input.InputPolicys;
-import org.apache.hadoop.fs.obs.input.OBSInputStream;
+import org.apache.hadoop.fs.obs.input.ObsSelectInputStream;
+import org.apache.hadoop.fs.obs.memartscc.CcGetShardParam;
+import org.apache.hadoop.fs.obs.memartscc.MemArtsCCClient;
+import org.apache.hadoop.fs.obs.memartscc.ObjectShard;
 import org.apache.hadoop.fs.obs.security.AccessType;
 import org.apache.hadoop.fs.obs.security.AuthorizeProvider;
-import org.apache.hadoop.fs.obs.security.DelegationTokenCapability;
 import org.apache.hadoop.fs.obs.security.OBSAuthorizationException;
+import org.apache.hadoop.fs.obs.security.ObsDelegationTokenManger;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.security.AccessControlException;
+import org.apache.hadoop.security.Credentials;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.token.Token;
 import org.apache.hadoop.util.Progressable;
@@ -63,9 +81,16 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
+import java.net.InetAddress;
 import java.net.URI;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Date;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -87,13 +112,13 @@ import java.util.concurrent.TimeUnit;
 //CHECKSTYLE:OFF
 @InterfaceAudience.Private
 @InterfaceStability.Evolving
-public class OBSFileSystem extends FileSystem {
+public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
     //CHECKSTYLE:ON
 
     /**
      * Class logger.
      */
-    public static final Logger LOG = LoggerFactory.getLogger(OBSFileSystem.class);
+    private static final Logger LOG = LoggerFactory.getLogger(OBSFileSystem.class);
 
     /**
      * Flag indicating if the filesystem instance is closed.
@@ -119,10 +144,16 @@ public class OBSFileSystem extends FileSystem {
 
     private int invokeCountThreshold = 0;
 
+    private ObsDelegationTokenManger obsDelegationTokenManger;
     /**
      * OBS client instance.
      */
     private ObsClient obs;
+
+    /**
+     * memartscc client instance.
+     */
+    private MemArtsCCClient memArtsCCClient;
 
     /**
      * Metrics consumer.
@@ -248,12 +279,18 @@ public class OBSFileSystem extends FileSystem {
     /**
      * Flag indicating if fast delete is enabled.
      */
-    private boolean enableTrash = false;
+    private boolean enableFastDelete = false;
+
+    private String fastDeleteVersion;
 
     /**
      * Trash directory for fast delete.
      */
-    private String trashDir;
+    private String fastDeleteDir;
+
+    private String hdfsTrashVersion;
+
+    private String hdfsTrashPrefix;
 
     /**
      * OBS redefined access control list.
@@ -282,9 +319,22 @@ public class OBSFileSystem extends FileSystem {
      * currently being written by this client. Note that a file can only be
      * written by a single filesystem.
      */
-    private Map<String, FSDataOutputStream> filesBeingWritten = new HashMap<>();
+    private final Map<String, FSDataOutputStream> filesBeingWritten = new HashMap<>();
 
     private boolean enableFileVisibilityAfterCreate = false;
+
+    private String readPolicy = OBSConstants.READAHEAD_POLICY_PRIMARY;
+
+    private boolean localityEnabled;
+
+    private TrafficStatisticsReporter statsReporter;
+
+    private TrafficStatistics trafficStatistics;
+
+    /**
+     * obs file system permissions mode.
+     */
+    private String permissionsMode;
 
     /**
      * Close all {@link FSDataOutputStream} opened by the owner {@link
@@ -347,6 +397,23 @@ public class OBSFileSystem extends FileSystem {
     public void initialize(final URI name, final Configuration originalConf) throws IOException {
         uri = URI.create(name.getScheme() + "://" + name.getAuthority());
         bucket = name.getAuthority();
+
+        // Delegation token only mode.
+        if (originalConf.getBoolean(OBSConstants.DELEGATION_TOKEN_ONLY, OBSConstants.DEFAULT_DELEGATION_TOKEN_ONLY)
+            && OBSCommonUtils.isStringEmpty(bucket)) {
+            LOG.debug("Delegation-token-only mode");
+            obsDelegationTokenManger = OBSCommonUtils.initDelegationTokenManger(this, uri, originalConf);
+            if (originalConf.getTrimmed(OBSConstants.READAHEAD_POLICY,
+                    OBSConstants.READAHEAD_POLICY_PRIMARY).equals(OBSConstants.READAHEAD_POLICY_MEMARTSCC)) {
+                memArtsCCClient = new MemArtsCCClient(bucket, enablePosix);
+                boolean initRes = memArtsCCClient.initializeDtOnly(originalConf);
+                if (!initRes) {
+                    LOG.warn("MemArtsCCClient dt-only initialize failed!");
+                }
+            }
+            return;
+        }
+
         // clone the configuration into one with propagated bucket options
         Configuration conf = OBSCommonUtils.propagateBucketOptions(originalConf, bucket);
         OBSCommonUtils.patchSecurityCredentialProviders(conf);
@@ -367,6 +434,8 @@ public class OBSFileSystem extends FileSystem {
                 OBSConstants.OBS_CLIENT_FACTORY_IMPL, OBSConstants.DEFAULT_OBS_CLIENT_FACTORY_IMPL,
                 OBSClientFactory.class);
             obs = ReflectionUtils.newInstance(obsClientFactoryClass, conf).createObsClient(name);
+            OBSCommonUtils.init(this, conf);
+
             sse = new SseWrapper(conf);
 
             Class<? extends BasicMetricsConsumer> metricsConsumerClass = conf.getClass(
@@ -382,8 +451,12 @@ public class OBSFileSystem extends FileSystem {
                 }
             }
 
-            OBSCommonUtils.verifyBucketExists(this);
-            enablePosix = OBSCommonUtils.getBucketFsStatus(obs, bucket);
+            try {
+                enablePosix = OBSCommonUtils.getBucketFsStatus(obs, bucket);
+            } catch (IOException e) {
+                OBSCommonUtils.setMetricsAbnormalInfo(this, OBSOperateAction.initialize, e);
+                throw e;
+            }
 
             maxKeys = OBSCommonUtils.intOption(conf, OBSConstants.MAX_PAGING_KEYS, OBSConstants.DEFAULT_MAX_PAGING_KEYS,
                 1);
@@ -421,64 +494,96 @@ public class OBSFileSystem extends FileSystem {
             LOG.debug("Using OBSBlockOutputStream with buffer = {}; block={};" + " queue limit={}", blockOutputBuffer,
                 partSize, blockOutputActiveBlocks);
 
-            String readPolicy = conf.getTrimmed(OBSConstants.READAHEAD_POLICY, OBSConstants.READAHEAD_POLICY_PRIMARY);
+            readPolicy = conf.getTrimmed(OBSConstants.READAHEAD_POLICY, OBSConstants.READAHEAD_POLICY_PRIMARY);
             inputPolicyFactory = InputPolicys.createFactory(readPolicy);
 
-            enableTrash = conf.getBoolean(OBSConstants.TRASH_ENABLE, OBSConstants.DEFAULT_TRASH);
-            if (enableTrash) {
+            // initialize MemArtsCC
+            if (readPolicy.equals(OBSConstants.READAHEAD_POLICY_MEMARTSCC)) {
+                if (initMemArtsCC(conf, name)) {
+                    // Traffic Report
+                    initTrafficReport(conf);
+                }
+            }
+
+            obsDelegationTokenManger = OBSCommonUtils.initDelegationTokenManger(this, uri, conf);
+            localityEnabled = conf.getBoolean(OBSConstants.MEMARTSCC_LOCALITY_ENABLE, OBSConstants.DEFAULT_MEMARTSCC_LOCALITY_ENABLE);
+
+            hdfsTrashVersion = conf.get(OBSConstants.HDFS_TRASH_VERSION, OBSConstants.HDFS_TRASH_VERSION_V1);
+            hdfsTrashPrefix = conf.get(OBSConstants.HDFS_TRASH_PREFIX, OBSConstants.DEFAULT_HDFS_TRASH_PREFIX);
+            enableFastDelete = conf.getBoolean(OBSConstants.FAST_DELETE_ENABLE, OBSConstants.DEFAULT_FAST_DELETE_ENABLE);
+            if (enableFastDelete) {
                 if (!isFsBucket()) {
                     String errorMsg = String.format("The bucket [%s] is not posix. not supported for " + "trash.",
                         bucket);
                     LOG.warn(errorMsg);
-                    enableTrash = false;
-                    trashDir = null;
+                    enableFastDelete = false;
+                    fastDeleteDir = null;
                 } else {
-                    trashDir = conf.get(OBSConstants.TRASH_DIR);
-                    if (StringUtils.isEmpty(trashDir)) {
+                    String fastDelete = "FastDelete";
+                    String defaultTrashDir = OBSCommonUtils.maybeAddTrailingSlash(
+                        this.getTrashRoot(new Path(fastDelete)).toUri().getPath()) + fastDelete;
+                    fastDeleteDir = conf.get(OBSConstants.FAST_DELETE_DIR, defaultTrashDir);
+                    if (OBSCommonUtils.isStringEmpty(fastDeleteDir)) {
                         String errorMsg = String.format(
-                            "The trash feature(fs.obs.trash.enable) is " + "enabled, but the "
-                                + "configuration(fs.obs.trash.dir [%s]) " + "is empty.", trashDir);
+                            "The fast delete feature(fs.obs.trash.enable) is " + "enabled, but the "
+                                + "configuration(fs.obs.trash.dir [%s]) " + "is empty.", fastDeleteDir);
                         LOG.error(errorMsg);
                         throw new ObsException(errorMsg);
                     }
-                    trashDir = OBSCommonUtils.maybeAddBeginningSlash(trashDir);
-                    trashDir = OBSCommonUtils.maybeAddTrailingSlash(trashDir);
+                    fastDeleteDir = OBSCommonUtils.maybeAddBeginningSlash(fastDeleteDir);
+                    fastDeleteDir = OBSCommonUtils.maybeAddTrailingSlash(fastDeleteDir);
+                    fastDeleteVersion = conf.get(OBSConstants.FAST_DELETE_VERSION, OBSConstants.FAST_DELETE_VERSION_V1);
                 }
             }
-            OBSCommonUtils.setMaxTimeInMillisecondsToRetry(conf.getLong(OBSConstants.MAX_TIME_IN_MILLISECOND_TO_RETRY,
-                OBSConstants.DEFAULT_TIME_IN_MILLISECOND_TO_RETRY));
-            enableCanonicalServiceName =
-                conf.getBoolean(OBSConstants.GET_CANONICAL_SERVICE_NAME_ENABLE,
-                    OBSConstants.DEFAULT_GET_CANONICAL_SERVICE_NAME_ENABLE);
+
+            OBSCommonUtils.setRetryTime(conf.getLong(OBSConstants.RETRY_MAXTIME, OBSConstants.DEFAULT_RETRY_MAXTIME),
+                conf.getLong(OBSConstants.RETRY_SLEEP_BASETIME, OBSConstants.DEFAULT_RETRY_SLEEP_BASETIME),
+                conf.getLong(OBSConstants.RETRY_SLEEP_MAXTIME, OBSConstants.DEFAULT_RETRY_SLEEP_MAXTIME));
             enableFileVisibilityAfterCreate =
                 conf.getBoolean(OBSConstants.FILE_VISIBILITY_AFTER_CREATE_ENABLE,
                     OBSConstants.DEFAULT_FILE_VISIBILITY_AFTER_CREATE_ENABLE);
             enableCanonicalServiceName = conf.getBoolean(OBSConstants.GET_CANONICAL_SERVICE_NAME_ENABLE,
                 OBSConstants.DEFAULT_GET_CANONICAL_SERVICE_NAME_ENABLE);
-
+            permissionsMode = conf.get(OBSConstants.PERMISSIONS_MODE, OBSConstants.DEFAULT_PERMISSIONS_MODE);
             this.authorizer = initAuthorizeProvider(conf);
         } catch (ObsException e) {
+            LOG.error("initializing OBSFilesystem fail", e);
             throw OBSCommonUtils.translateException("initializing ", new Path(name), e);
         }
 
         LOG.info("Finish initializing filesystem instance for uri: {}", uri);
     }
 
+    private void initTrafficReport(final Configuration conf) {
+        boolean reportEnable = conf.getBoolean(OBSConstants.MEMARTSCC_TRAFFIC_REPORT_ENABLE, OBSConstants.DEFAULT_MEMARTSCC_TRAFFIC_REPORT_ENABLE);
+        LOG.debug("get report enable from config:{}", reportEnable);
+        if (!reportEnable) {
+            return;
+         }
+
+        trafficStatistics = new TrafficStatistics();
+        long interval = getConf().
+                getLong(OBSConstants.MEMARTSCC_TRAFFIC_REPORT_INTERVAL, OBSConstants.MEMARTSCC_TRAFFIC_REPORT_DEFAULT_INTERVAL);
+        LOG.debug("get report traffic interval from config: interval:{}", interval);
+        statsReporter = new TrafficStatisticsReporter(trafficStatistics, memArtsCCClient, interval);
+        statsReporter.startReport();
+    }
+
     private AuthorizeProvider initAuthorizeProvider(Configuration conf) throws IOException {
-        AuthorizeProvider authorizer = null;
+        AuthorizeProvider authorizeProvider = null;
         Class<?> authClassName = conf.getClass(OBSConstants.AUTHORIZER_PROVIDER, null);
         if (authClassName != null) {
             try {
                 LOG.info("authorize provider is " + authClassName.getName());
-                authorizer = (AuthorizeProvider)authClassName.newInstance();
-                authorizer.init(conf);
+                authorizeProvider = (AuthorizeProvider)authClassName.newInstance();
+                authorizeProvider.init(conf);
             } catch (Exception e) {
                 LOG.error(String.format("init %s failed", OBSConstants.AUTHORIZER_PROVIDER), e);
                 throw new IOException(String.format("init %s failed", OBSConstants.AUTHORIZER_PROVIDER), e);
             }
         }
 
-        return authorizer;
+        return authorizeProvider;
     }
 
     private void checkPermission(Path path, AccessType accessType) throws IOException {
@@ -497,7 +602,7 @@ public class OBSFileSystem extends FileSystem {
                 long st = System.currentTimeMillis();
                 result = authorizer.isAuthorized(this.bucket, key, accessType);
                 long et = System.currentTimeMillis();
-                if (LOG.isDebugEnabled()){
+                if (LOG.isDebugEnabled()) {
                     LOG.debug("authorizing:[user: {}], [action: {}], "
                             + "[bucket: {}], [path: {}], [result: {}], [cost: {}]",
                         currentUser,
@@ -528,6 +633,19 @@ public class OBSFileSystem extends FileSystem {
                 }
             }
         }
+    }
+
+    private boolean initMemArtsCC(final Configuration conf, final URI name) {
+        String obsBucketName = getBucket();
+        memArtsCCClient = new MemArtsCCClient(obsBucketName, enablePosix);
+        if (!memArtsCCClient.initialize(name, conf)) {
+            LOG.warn("fallback to 'primary' read policy");
+            // fall back to 'primary' read policy
+            inputPolicyFactory = InputPolicys.createFactory(OBSConstants.READAHEAD_POLICY_PRIMARY);
+            // do not set memArtsCCClient to null
+            return false;
+        }
+        return true;
     }
 
     private void initThreadPools(final Configuration conf) {
@@ -716,6 +834,16 @@ public class OBSFileSystem extends FileSystem {
     }
 
     /**
+     * Return the MemArtsCC Client used by this filesystem.
+     *
+     * @return MemArtsCCClient
+     */
+    @VisibleForTesting
+    public MemArtsCCClient getMemArtsCCClient() {
+        return memArtsCCClient;
+    }
+
+    /**
      * Return the read ahead range used by this filesystem.
      *
      * @return read ahead range
@@ -758,6 +886,32 @@ public class OBSFileSystem extends FileSystem {
     }
 
     /**
+     * Open an FSDataInputStream at the indicated Path with the given configuration.
+     *
+     * @param f
+     * @param jobConf
+     * @return
+     * @throws IOException
+     */
+    @Override
+    public FSDataInputStream open(Path f, Configuration jobConf) throws IOException {
+        String sqlExpr = jobConf.get("mapreduce.job.input.file.option.fs.obs.select.sql");
+        if (sqlExpr != null) {
+            String key = OBSCommonUtils.pathToKey(this, f);
+            String scanStart = jobConf.get("mapreduce.job.input.file.option.fs.obs.select.scan.start");
+            String scanEnd = jobConf.get("mapreduce.job.input.file.option.fs.obs.select.scan.end");
+            LOG.info("OBSFileSystem.open(): bucket: {}; key: {}; sql: {}; range: [{}, {}]%n",
+                bucket, key,
+                sqlExpr,
+                scanStart != null ? scanStart : "n/a",
+                scanEnd != null ? scanEnd : "n/a");
+
+            return select(f, sqlExpr, jobConf);
+        }
+        return open(f);
+    }
+
+    /**
      * Open an FSDataInputStream at the indicated Path.
      *
      * @param f          the file path to open
@@ -768,43 +922,146 @@ public class OBSFileSystem extends FileSystem {
     @Override
     public FSDataInputStream open(final Path f, final int bufferSize) throws IOException {
         checkOpen();
-        long startTime = System.currentTimeMillis();
-        long endTime;
         LOG.debug("Opening '{}' for reading.", f);
-        final FileStatus fileStatus;
+        final OBSFileStatus fileStatus;
         try {
-            fileStatus = OBSCommonUtils.innerGetFileStatusWithRetry(this, f);
-        } catch (FileConflictException e) {
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                    BasicMetricsConsumer.MetricRecord.OPEN, false, endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
+            fileStatus = OBSCommonUtils.getFileStatusWithRetry(this, f);
+        } catch (OBSFileConflictException e) {
             throw new AccessControlException(e);
         }
 
         if (fileStatus.isDirectory()) {
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                    BasicMetricsConsumer.MetricRecord.OPEN, false, endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
             throw new FileNotFoundException("Can't open " + f + " because it is a directory");
         }
         checkPermission(f, AccessType.READ);
         FSInputStream fsInputStream = inputPolicyFactory.create(this, bucket, OBSCommonUtils.pathToKey(this, f),
-            fileStatus.getLen(), statistics, boundedMultipartUploadThreadPool);
-        FSDataInputStream fsDataInputStream = new FSDataInputStream(fsInputStream);
+            fileStatus.getLen(), statistics, boundedMultipartUploadThreadPool, fileStatus);
+        return new FSDataInputStream(fsInputStream);
+    }
 
-        endTime = System.currentTimeMillis();
-        if (getMetricSwitch()) {
-            BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                BasicMetricsConsumer.MetricRecord.OPEN, true, endTime - startTime);
-            OBSCommonUtils.setMetricsInfo(this, record);
+    private FSDataInputStream select(Path f, String sqlExpr, Configuration jobConf) throws IOException {
+        final FileStatus fileStatus = getFileStatus(f);
+        if (fileStatus.isDirectory()) {
+            throw new FileNotFoundException("Can't open " + f + " because it is a directory");
         }
-        return fsDataInputStream;
+
+        String key = OBSCommonUtils.pathToKey(this, f);
+
+        final String obsSelectJobPath = "mapreduce.job.input.file.option.fs.obs.select.";
+        String fileFormat = jobConf.get(obsSelectJobPath + "format");
+        if (fileFormat == null) {
+            throw new IllegalArgumentException("file format is missing");
+        }
+
+        if (!fileFormat.equals("orc") &&
+            !fileFormat.equals("csv") &&
+            !fileFormat.equals("json")) {
+            throw new IllegalArgumentException("invalid file format '" + fileFormat + "', it must be one of { 'csv', 'json', 'orc' }");
+        }
+
+        SelectObjectRequest selectRequest = new SelectObjectRequest()
+                                                    .withExpression(sqlExpr)
+                                                    .withBucketName(bucket)
+                                                    .withKey(key)
+                                                    .withExpressionType(ExpressionType.SQL);
+
+        if (!fileFormat.equals("json")) {
+            // prepare input & output for CSV & ORC
+            CsvOutput output = new CsvOutput();
+            String delimiter = jobConf.get(obsSelectJobPath + "output.csv.delimiter");
+            if (delimiter != null) {
+                if (delimiter.length() != 1) {
+                    throw new IllegalArgumentException("Invalid output delimiter " + delimiter);
+                }
+
+                output.withFieldDelimiter(delimiter.charAt(0));
+            }
+
+            // prepare the request
+            if (fileFormat.equals("csv")) {
+                CsvInput input = new CsvInput();
+
+                delimiter = jobConf.get(obsSelectJobPath + "input.csv.delimiter");
+                if (delimiter != null) {
+                    if (delimiter.length() != 1)
+                        throw new IllegalArgumentException("Invalid input delimiter " + delimiter);
+
+                    input.withFieldDelimiter(delimiter.charAt(0));
+                }
+
+                String headerInfo = jobConf.get(obsSelectJobPath + "input.csv.header");
+                if (headerInfo != null) {
+                    boolean found = false;
+                    for (FileHeaderInfo enumEntry : FileHeaderInfo.values()) {
+                        found = (enumEntry.toString().equals(headerInfo));
+                        if (found) {
+                            input.withFileHeaderInfo(enumEntry);
+                            break;
+                        }
+                    }
+
+                    if (!found) {
+                        throw new IllegalArgumentException("Invalid header " + headerInfo);
+                    }
+                }
+
+                selectRequest.withInputSerialization(
+                                new InputSerialization()
+                                    .withCsv(input)
+                            ).withOutputSerialization(
+                                new OutputSerialization()
+                                    .withCsv(output)
+                            );
+
+            } else {
+                // it is ORC
+                selectRequest.withInputSerialization(
+                                new InputSerialization()
+                                    .withOrc(
+                                        new OrcInput()
+                                    )
+                            ).withOutputSerialization(
+                                new OutputSerialization()
+                                    .withCsv(output)
+                            );
+            }
+        } else {
+            // it is JSON
+            JsonType type = jobConf.get(obsSelectJobPath + "input.json.type").equals("lines") ?
+                                        JsonType.LINES : JsonType.DOCUMENT;
+
+            selectRequest.withInputSerialization(
+                            new InputSerialization()
+                                .withJson(
+                                    new JsonInput()
+                                        .withType(type)
+                                )
+                        ).withOutputSerialization(
+                            new OutputSerialization()
+                                .withJson(
+                                    new JsonOutput()
+                                )
+                        );
+        }
+
+        // Set Scan Range properties.
+        String scanStart = jobConf.get(obsSelectJobPath + "scan.start");
+        String scanEnd = jobConf.get(obsSelectJobPath + "scan.end");
+        if (scanStart != null && scanEnd != null) {
+            selectRequest.withScanRange(
+                            new ScanRange()
+                                .withStart(Long.parseLong(scanStart))
+                                .withEnd(Long.parseLong(scanEnd)));
+        }
+
+        LOG.info("OBSFileSystem.select(): bucket: {}; key: {}; sql: {}; range: [{}, {}]\n",
+            bucket, key, sqlExpr,
+            scanStart != null ? scanStart : "n/a",
+            scanEnd != null ? scanEnd : "n/a");
+
+        SelectObjectResult selectResult = obs.selectObjectContent(selectRequest);
+        return new FSDataInputStream(
+                    new ObsSelectInputStream(bucket, key, selectResult));
     }
 
     /**
@@ -830,45 +1087,21 @@ public class OBSFileSystem extends FileSystem {
         checkOpen();
         String key = OBSCommonUtils.pathToKey(this, f);
         final FileStatus status;
-        long startTime = System.currentTimeMillis();
-        long endTime;
         boolean exist = true;
         try {
             // get the status or throw an exception
             try {
-                status = OBSCommonUtils.innerGetFileStatusWithRetry(this, f);
-            } catch (FileConflictException e) {
-                endTime = System.currentTimeMillis();
-                if (getMetricSwitch()) {
-                    BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
-                        BasicMetricsConsumer.MetricRecord.OVERWRITE, BasicMetricsConsumer.MetricRecord.CREATE, false,
-                        endTime - startTime);
-                    OBSCommonUtils.setMetricsInfo(this, record);
-                }
-
+                status = OBSCommonUtils.getFileStatusWithRetry(this, f);
+            } catch (OBSFileConflictException e) {
                 throw new ParentNotDirectoryException(e.getMessage());
             }
 
             // if the thread reaches here, there is something at the path
             if (status.isDirectory()) {
-                endTime = System.currentTimeMillis();
-                if (getMetricSwitch()) {
-                    BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
-                        BasicMetricsConsumer.MetricRecord.OVERWRITE, BasicMetricsConsumer.MetricRecord.CREATE, false,
-                        endTime - startTime);
-                    OBSCommonUtils.setMetricsInfo(this, record);
-                }
                 // path references a directory: automatic error
                 throw new FileAlreadyExistsException(f + " is a directory");
             }
             if (!overwrite) {
-                endTime = System.currentTimeMillis();
-                if (getMetricSwitch()) {
-                    BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
-                        BasicMetricsConsumer.MetricRecord.OVERWRITE, BasicMetricsConsumer.MetricRecord.CREATE, false,
-                        endTime - startTime);
-                    OBSCommonUtils.setMetricsInfo(this, record);
-                }
                 // path references a file and overwrite is disabled
                 throw new FileAlreadyExistsException(f + " already exists");
             }
@@ -895,13 +1128,6 @@ public class OBSFileSystem extends FileSystem {
             filesBeingWritten.put(key, outputStream);
         }
 
-        endTime = System.currentTimeMillis();
-        if (getMetricSwitch()) {
-            BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
-                BasicMetricsConsumer.MetricRecord.OVERWRITE, BasicMetricsConsumer.MetricRecord.CREATE, true,
-                endTime - startTime);
-            OBSCommonUtils.setMetricsInfo(this, record);
-        }
         return outputStream;
     }
 
@@ -952,8 +1178,6 @@ public class OBSFileSystem extends FileSystem {
         final int bufferSize, final short replication, final long blkSize, final Progressable progress,
         final ChecksumOpt checksumOpt) throws IOException {
         checkOpen();
-        long startTime = System.currentTimeMillis();
-        long endTime;
         LOG.debug("create: Creating new file {}, flags:{}, isFsBucket:{}", f, flags, isFsBucket());
         OBSCommonUtils.checkCreateFlag(flags);
         FSDataOutputStream outputStream;
@@ -968,27 +1192,13 @@ public class OBSFileSystem extends FileSystem {
             try {
                 // get the status or throw an FNFE
                 try {
-                    status = OBSCommonUtils.innerGetFileStatusWithRetry(this, f);
-                } catch (FileConflictException e) {
-                    endTime = System.currentTimeMillis();
-                    if (getMetricSwitch()) {
-                        BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
-                            BasicMetricsConsumer.MetricRecord.FLAGS, BasicMetricsConsumer.MetricRecord.CREATE, false,
-                            endTime - startTime);
-                        OBSCommonUtils.setMetricsInfo(this, record);
-                    }
+                    status = OBSCommonUtils.getFileStatusWithRetry(this, f);
+                } catch (OBSFileConflictException e) {
                     throw new ParentNotDirectoryException(e.getMessage());
                 }
 
                 // if the thread reaches here, there is something at the path
                 if (status.isDirectory()) {
-                    endTime = System.currentTimeMillis();
-                    if (getMetricSwitch()) {
-                        BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
-                            BasicMetricsConsumer.MetricRecord.FLAGS, BasicMetricsConsumer.MetricRecord.CREATE, false,
-                            endTime - startTime);
-                        OBSCommonUtils.setMetricsInfo(this, record);
-                    }
                     // path references a directory: automatic error
                     throw new FileAlreadyExistsException(f + " is a directory");
                 }
@@ -1010,26 +1220,10 @@ public class OBSFileSystem extends FileSystem {
             synchronized (filesBeingWritten) {
                 filesBeingWritten.put(key, outputStream);
             }
-
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
-                    BasicMetricsConsumer.MetricRecord.FLAGS, BasicMetricsConsumer.MetricRecord.CREATE, true,
-                    endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
             return outputStream;
         } else {
             outputStream = create(f, permission, flags == null || flags.contains(CreateFlag.OVERWRITE), bufferSize,
                 replication, blkSize, progress);
-
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
-                    BasicMetricsConsumer.MetricRecord.FLAGS, BasicMetricsConsumer.MetricRecord.CREATE, true,
-                    endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
             return outputStream;
         }
     }
@@ -1053,28 +1247,13 @@ public class OBSFileSystem extends FileSystem {
         final EnumSet<CreateFlag> flags, final int bufferSize, final short replication, final long blkSize,
         final Progressable progress) throws IOException {
         checkOpen();
-        long startTime = System.currentTimeMillis();
-        long endTime;
         OBSCommonUtils.checkCreateFlag(flags);
         if (path.getParent() != null && !this.exists(path.getParent())) {
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                    BasicMetricsConsumer.MetricRecord.CREATE_NR, false, endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
             throw new FileNotFoundException(path.toString() + " parent directory not exist.");
         }
 
-        FSDataOutputStream fsDataOutputStream = create(path, permission, flags.contains(CreateFlag.OVERWRITE),
+        return create(path, permission, flags.contains(CreateFlag.OVERWRITE),
             bufferSize, replication, blkSize, progress);
-        endTime = System.currentTimeMillis();
-        if (getMetricSwitch()) {
-            BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                BasicMetricsConsumer.MetricRecord.CREATE_NR, true, endTime - startTime);
-            OBSCommonUtils.setMetricsInfo(this, record);
-        }
-        return fsDataOutputStream;
     }
 
     /**
@@ -1089,8 +1268,6 @@ public class OBSFileSystem extends FileSystem {
     public FSDataOutputStream append(final Path f, final int bufferSize, final Progressable progress)
         throws IOException {
         checkOpen();
-        long startTime = System.currentTimeMillis();
-        long endTime;
         if (!isFsBucket()) {
             throw new UnsupportedOperationException("non-posix bucket. Append is not supported " + "by OBSFileSystem");
         }
@@ -1100,26 +1277,14 @@ public class OBSFileSystem extends FileSystem {
         // get the status or throw an FNFE
         FileStatus status;
         try {
-            status = OBSCommonUtils.innerGetFileStatusWithRetry(this, f);
-        } catch (FileConflictException e) {
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                    BasicMetricsConsumer.MetricRecord.APPEND, false, endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
+            status = OBSCommonUtils.getFileStatusWithRetry(this, f);
+        } catch (OBSFileConflictException e) {
             throw new AccessControlException(e);
         }
 
         long objectLen = status.getLen();
         // if the thread reaches here, there is something at the path
         if (status.isDirectory()) {
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                    BasicMetricsConsumer.MetricRecord.APPEND, false, endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
             // path references a directory: automatic error
             throw new FileAlreadyExistsException(f + " is a directory");
         }
@@ -1137,35 +1302,9 @@ public class OBSFileSystem extends FileSystem {
         synchronized (filesBeingWritten) {
             filesBeingWritten.put(key, outputStream);
         }
-
-        endTime = System.currentTimeMillis();
-        if (getMetricSwitch()) {
-            BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                BasicMetricsConsumer.MetricRecord.APPEND, true, endTime - startTime);
-            OBSCommonUtils.setMetricsInfo(this, record);
-        }
         return outputStream;
     }
 
-    /**
-     * Truncate the file in the indicated path to the indicated size.
-     * <ul>
-     * <li>Fails if path is a directory.</li>
-     * <li>Fails if path does not exist.</li>
-     * <li>Fails if path is not closed.</li>
-     * <li>Fails if new size is greater than current size.</li>
-     * </ul>
-     *
-     * @param f         The path to the file to be truncated
-     * @param newLength The size the file is to be truncated to
-     * @return <code>true</code> if the file has been truncated to the desired
-     * <code>newLength</code> and is immediately available to be reused for
-     * write operations such as <code>append</code>, or
-     * <code>false</code> if a background process of adjusting the length of
-     * the last block has been started, and clients should wait for it to
-     * complete before proceeding with further file updates.
-     * @throws IOException IO failure
-     */
     @Override
     public boolean truncate(Path f, long newLength) throws IOException {
         checkOpen();
@@ -1179,8 +1318,8 @@ public class OBSFileSystem extends FileSystem {
 
         FileStatus status;
         try {
-            status = OBSCommonUtils.innerGetFileStatusWithRetry(this, f);
-        } catch (FileConflictException e) {
+            status = OBSCommonUtils.getFileStatusWithRetry(this, f);
+        } catch (OBSFileConflictException e) {
             throw new AccessControlException(e);
         }
 
@@ -1192,7 +1331,7 @@ public class OBSFileSystem extends FileSystem {
         if (isFileBeingWritten(key)) {
             // AlreadyBeingCreatedException (on HDFS NameNode) is transformed
             // into IOException (on HDFS Client)
-            throw new AlreadyBeingCreatedException("Cannot truncate " + f + " that is being written.");
+            throw new OBSAlreadyBeingCreatedException("Cannot truncate " + f + " that is being written.");
         }
 
         // Truncate length check.
@@ -1249,56 +1388,75 @@ public class OBSFileSystem extends FileSystem {
                 checkPermission(src, AccessType.WRITE);
                 checkPermission(dst,AccessType.WRITE);
                 boolean success = OBSPosixBucketUtils.renameBasedOnPosix(this, src, dst);
-                endTime = System.currentTimeMillis();
-                if (getMetricSwitch()) {
-                    BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                        BasicMetricsConsumer.MetricRecord.RENAME, true, endTime - startTime);
-                    OBSCommonUtils.setMetricsInfo(this, record);
-                }
+                OBSCommonUtils.setMetricsNormalInfo(this, OBSOperateAction.rename, startTime);
                 return success;
             } else {
                 checkPermission(src, AccessType.WRITE);
                 checkPermission(dst, AccessType.WRITE);
                 boolean success = OBSObjectBucketUtils.renameBasedOnObject(this, src, dst);
-                endTime = System.currentTimeMillis();
-                if (getMetricSwitch()) {
-                    BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                        BasicMetricsConsumer.MetricRecord.RENAME, true, endTime - startTime);
-                    OBSCommonUtils.setMetricsInfo(this, record);
-                }
+                OBSCommonUtils.setMetricsNormalInfo(this, OBSOperateAction.rename, startTime);
                 return success;
             }
         } catch (ObsException e) {
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                    BasicMetricsConsumer.MetricRecord.RENAME, false, endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
+            OBSCommonUtils.setMetricsAbnormalInfo(this, OBSOperateAction.rename, e);
             throw OBSCommonUtils.translateException("rename(" + src + ", " + dst + ")", src, e);
-        } catch (RenameFailedException e) {
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                    BasicMetricsConsumer.MetricRecord.RENAME, false, endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
+        } catch (OBSRenameFailedException e) {
+            OBSCommonUtils.setMetricsAbnormalInfo(this, OBSOperateAction.rename, e);
             LOG.error(e.getMessage());
             return e.getExitCode();
         } catch (FileNotFoundException e) {
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                    BasicMetricsConsumer.MetricRecord.RENAME, false, endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
-            LOG.error(e.toString());
+            OBSCommonUtils.setMetricsAbnormalInfo(this, OBSOperateAction.rename, e);
+            LOG.error("file not found when rename(" + src + ", " + dst + ")");
             return false;
+        } catch (IOException e) {
+            OBSCommonUtils.setMetricsAbnormalInfo(this, OBSOperateAction.rename, e);
+            throw e;
         } finally {
             endTime = System.currentTimeMillis();
             LOG.debug("Rename path {} to {} finished, thread:{}, " + "timeUsedInMilliSec:{}.", src, dst, threadId,
                 endTime - startTime);
         }
+    }
+
+    @Override
+    public Path getTrashRoot(Path path) {
+        if (OBSConstants.HDFS_TRASH_VERSION_V2.equals(hdfsTrashVersion)) {
+            return this.makeQualified(new Path(hdfsTrashPrefix, getUsername()));
+        }
+
+        return super.getTrashRoot(path);
+    }
+
+    @Override
+    public Collection<FileStatus> getTrashRoots(boolean allUsers) {
+        if (OBSConstants.HDFS_TRASH_VERSION_V2.equals(hdfsTrashVersion)) {
+            Path trashPrefix = new Path(hdfsTrashPrefix);
+            List<FileStatus> ret = new ArrayList<>();
+            try {
+                if (!exists(trashPrefix)) {
+                    return ret;
+                }
+
+                if (allUsers) {
+                    FileStatus[] candidates = listStatus(trashPrefix);
+                    for (FileStatus fs : candidates) {
+                        ret.add(fs);
+                    }
+                    return ret;
+                }
+
+                Path userTrash = new Path(trashPrefix, getUsername());
+                if (exists(userTrash)) {
+                    ret.add(getFileStatus(userTrash));
+                }
+            } catch (IOException e) {
+                LOG.warn("Cannot get all trash roots", e);
+            }
+
+            return ret;
+        }
+
+        return super.getTrashRoots(allUsers);
     }
 
     /**
@@ -1381,56 +1539,30 @@ public class OBSFileSystem extends FileSystem {
     public boolean delete(final Path f, final boolean recursive) throws IOException {
         checkOpen();
         long startTime = System.currentTimeMillis();
-        long endTime;
         try {
-            FileStatus status = OBSCommonUtils.innerGetFileStatusWithRetry(this, f);
+            FileStatus status = OBSCommonUtils.getFileStatusWithRetry(this, f);
             LOG.debug("delete: path {} - recursive {}", status.getPath(), recursive);
 
             if (enablePosix) {
                 checkPermission(f,AccessType.WRITE);
                 boolean success = OBSPosixBucketUtils.fsDelete(this, status, recursive);
-                endTime = System.currentTimeMillis();
-                if (getMetricSwitch()) {
-                    BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                        BasicMetricsConsumer.MetricRecord.DELETE, true, endTime - startTime);
-                    OBSCommonUtils.setMetricsInfo(this, record);
-                }
+                OBSCommonUtils.setMetricsNormalInfo(this, OBSOperateAction.delete, startTime);
                 return success;
             }
             checkPermission(f,AccessType.WRITE);
-            boolean success = OBSObjectBucketUtils.objectDelete(this, status, recursive);
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                    BasicMetricsConsumer.MetricRecord.DELETE, true, endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
-            return success;
+            return OBSObjectBucketUtils.objectDelete(this, status, recursive);
         } catch (FileNotFoundException e) {
             LOG.warn("Couldn't delete {} - does not exist", f);
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                    BasicMetricsConsumer.MetricRecord.DELETE, false, endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
             return false;
-        } catch (FileConflictException e) {
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                    BasicMetricsConsumer.MetricRecord.DELETE, false, endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
+        } catch (OBSFileConflictException e) {
+            OBSCommonUtils.setMetricsAbnormalInfo(this, OBSOperateAction.delete, e);
             throw new AccessControlException(e);
         } catch (ObsException e) {
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                    BasicMetricsConsumer.MetricRecord.DELETE, false, endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
+            OBSCommonUtils.setMetricsAbnormalInfo(this, OBSOperateAction.delete, e);
             throw OBSCommonUtils.translateException("delete", f, e);
+        } catch (IOException e) {
+            OBSCommonUtils.setMetricsAbnormalInfo(this, OBSOperateAction.delete, e);
+            throw e;
         }
     }
 
@@ -1439,8 +1571,8 @@ public class OBSFileSystem extends FileSystem {
      *
      * @return the flag
      */
-    boolean isEnableTrash() {
-        return enableTrash;
+    boolean isEnableFastDelete() {
+        return enableFastDelete;
     }
 
     /**
@@ -1448,8 +1580,15 @@ public class OBSFileSystem extends FileSystem {
      *
      * @return the trash directory
      */
-    String getTrashDir() {
-        return trashDir;
+    String getFastDeleteDir() {
+        if (fastDeleteVersion.equals(OBSConstants.FAST_DELETE_VERSION_V2)) {
+            SimpleDateFormat dateFmt = new SimpleDateFormat(OBSConstants.FAST_DELETE_VERSION_V2_CHECKPOINT_FORMAT);
+            String checkpointStr = dateFmt.format(new Date());
+            String checkpointDir = String.format(Locale.ROOT, "%s%s/",
+                OBSCommonUtils.maybeAddTrailingSlash(fastDeleteDir), checkpointStr);
+            return checkpointDir;
+        }
+        return fastDeleteDir;
     }
 
     /**
@@ -1469,26 +1608,29 @@ public class OBSFileSystem extends FileSystem {
         long threadId = Thread.currentThread().getId();
         long endTime;
         try {
-            FileStatus[] statuses = OBSCommonUtils.innerListStatus(this, f, false);
+            FileStatus[] statuses = OBSCommonUtils.listStatus(this, f, false);
             endTime = System.currentTimeMillis();
             LOG.debug("List status for path:{}, thread:{}, timeUsedInMilliSec:{}", f, threadId, endTime - startTime);
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
-                    BasicMetricsConsumer.MetricRecord.NONRECURSIVE, BasicMetricsConsumer.MetricRecord.LIST_STATUS, true,
-                    endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
             return statuses;
         } catch (ObsException e) {
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
-                    BasicMetricsConsumer.MetricRecord.NONRECURSIVE, BasicMetricsConsumer.MetricRecord.LIST_STATUS,
-                    false, endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
             throw OBSCommonUtils.translateException("listStatus", f, e);
         }
+    }
+
+    @Override
+    public Path getHomeDirectory() {
+        return this.makeQualified(new Path("/user/" + getUsername()));
+    }
+
+    static String getUsername() {
+        String user;
+        try {
+            user = UserGroupInformation.getCurrentUser().getShortUserName();
+        } catch(IOException ex) {
+            LOG.error("get user fail,fallback to system property user.name", ex);
+            user = System.getProperty("user.name");
+        }
+        return user;
     }
 
     /**
@@ -1510,24 +1652,11 @@ public class OBSFileSystem extends FileSystem {
         long threadId = Thread.currentThread().getId();
         long endTime;
         try {
-            FileStatus[] statuses = OBSCommonUtils.innerListStatus(this, f, recursive);
+            FileStatus[] statuses = OBSCommonUtils.listStatus(this, f, recursive);
             endTime = System.currentTimeMillis();
             LOG.debug("List status for path:{}, thread:{}, timeUsedInMilliSec:{}", f, threadId, endTime - startTime);
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
-                    BasicMetricsConsumer.MetricRecord.RECURSIVE, BasicMetricsConsumer.MetricRecord.LIST_STATUS, true,
-                    endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
             return statuses;
         } catch (ObsException e) {
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
-                    BasicMetricsConsumer.MetricRecord.RECURSIVE, BasicMetricsConsumer.MetricRecord.LIST_STATUS, false,
-                    endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
             throw OBSCommonUtils.translateException(
                 "listStatus with recursive flag[" + (recursive ? "true] " : "false] "), f, e);
         }
@@ -1592,26 +1721,68 @@ public class OBSFileSystem extends FileSystem {
         throws IOException, FileAlreadyExistsException {
         checkOpen();
         checkPermission(path,AccessType.WRITE);
-        long startTime = System.currentTimeMillis();
-        long endTime;
         try {
-            boolean success = OBSCommonUtils.innerMkdirs(this, path);
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                    BasicMetricsConsumer.MetricRecord.MKDIRS, true, endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
-            return success;
+            return OBSCommonUtils.mkdirs(this, path);
         } catch (ObsException e) {
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                    BasicMetricsConsumer.MetricRecord.MKDIRS, false, endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
             throw OBSCommonUtils.translateException("mkdirs", path, e);
         }
+    }
+
+    @Override
+    public BlockLocation[] getFileBlockLocations(FileStatus file, long start, long len) throws IOException {
+        if (!readPolicy.equals(OBSConstants.READAHEAD_POLICY_MEMARTSCC)
+            || this.getMemArtsCCClient() == null || !localityEnabled) {
+            // only support for MemArtsCC
+            return super.getFileBlockLocations(file, start, len);
+        }
+        if (file == null || start < 0L || len < 0L) {
+            return super.getFileBlockLocations(file, start, len);
+        } else if (file.isDirectory()) {
+            return super.getFileBlockLocations(file, start, len);
+        } else if (file.getLen() <= start) {
+            return new BlockLocation[0];
+        } else {
+            MemArtsCCClient ccClient = this.getMemArtsCCClient();
+            CcGetShardParam shardParam = buildCcShardParam(file, start, len);
+            int result = ccClient.getObjectShardInfo(shardParam);
+
+            if (result != OBSConstants.GET_SHARD_INFO_SUCCESS) {
+                LOG.error("Get memartscc shard info failed! ret code = {}", result);
+                return new BlockLocation[0];
+            }
+
+            ObjectShard[] objectShards = shardParam.getObjectShard();
+            int numOfBlocks = shardParam.getValidShardNum();
+            BlockLocation[] locations = new BlockLocation[numOfBlocks];
+            for(int i = 0; i < numOfBlocks; ++i) {
+                long offset = objectShards[i].getStart();
+                long length = objectShards[i].getEnd() - offset;
+                String[] hosts = objectShards[i].getHosts();
+                for (int j = 0; j < hosts.length; j++) {
+                    InetAddress addr = InetAddress.getByName(hosts[j]);
+                    String hostName = addr.getHostName();
+                    hosts[j] = hostName;
+                }
+                locations[i] = new BlockLocation(hosts, hosts, offset, length);
+            }
+            return locations;
+        }
+    }
+
+    private CcGetShardParam buildCcShardParam(FileStatus file, long start, long len) {
+        String obsBucketName = getBucket();
+        long end = start + len;
+        String objKey = OBSCommonUtils.pathToKey(this, file.getPath());
+
+        int shardNum = (int) (len / this.blockSize + 1);
+        ObjectShard[] objectShards = new ObjectShard[shardNum];
+        for (int i = 0; i < shardNum; i++) {
+            String[] hosts = new String[OBSConstants.MAX_DUPLICATION_NUM];
+            objectShards[i] = new ObjectShard(hosts);
+        }
+
+        return new CcGetShardParam(start, end, obsBucketName, enablePosix, objKey,
+                objectShards, shardNum, 0);
     }
 
     /**
@@ -1626,26 +1797,16 @@ public class OBSFileSystem extends FileSystem {
     public FileStatus getFileStatus(final Path f) throws FileNotFoundException, IOException {
         checkOpen();
         long startTime = System.currentTimeMillis();
-        long endTime;
         try {
-            FileStatus fileStatus = OBSCommonUtils.innerGetFileStatusWithRetry(this, f);
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                    BasicMetricsConsumer.MetricRecord.GET_FILE_STATUS, true, endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
+            FileStatus fileStatus = OBSCommonUtils.getFileStatusWithRetry(this, f);
+            OBSCommonUtils.setMetricsNormalInfo(this, OBSOperateAction.getFileStatus, startTime);
             return fileStatus;
-        } catch (FileConflictException e) {
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                    BasicMetricsConsumer.MetricRecord.GET_FILE_STATUS, false, endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
+        } catch (OBSFileConflictException e) {
+            FileNotFoundException fileNotFoundException = new FileNotFoundException(e.getMessage());
+            OBSCommonUtils.setMetricsAbnormalInfo(this, OBSOperateAction.getFileStatus, fileNotFoundException);
             // For super user, convert AccessControlException
             // to null on NameNode then to FileNotFoundException on Client
-            throw new FileNotFoundException(e.getMessage());
+            throw fileNotFoundException;
         }
     }
 
@@ -1658,13 +1819,10 @@ public class OBSFileSystem extends FileSystem {
      */
     @VisibleForTesting
     OBSFileStatus innerGetFileStatus(final Path f) throws IOException {
-        OBSFileStatus fileStatus;
         if (enablePosix) {
-            fileStatus = OBSPosixBucketUtils.innerFsGetObjectStatus(this, f);
-            return fileStatus;
+            return OBSPosixBucketUtils.innerFsGetObjectStatus(this, f);
         }
-        fileStatus = OBSObjectBucketUtils.innerGetObjectStatus(this, f);
-        return fileStatus;
+        return OBSObjectBucketUtils.innerGetObjectStatus(this, f);
     }
 
     /**
@@ -1678,8 +1836,6 @@ public class OBSFileSystem extends FileSystem {
     @Override
     public ContentSummary getContentSummary(final Path f) throws FileNotFoundException, IOException {
         checkOpen();
-        long startTime = System.currentTimeMillis();
-        long endTime;
         ContentSummary contentSummary;
         if (!obsContentSummaryEnable) {
             return super.getContentSummary(f);
@@ -1687,14 +1843,8 @@ public class OBSFileSystem extends FileSystem {
 
         FileStatus status;
         try {
-            status = OBSCommonUtils.innerGetFileStatusWithRetry(this, f);
-        } catch (FileConflictException e) {
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                    BasicMetricsConsumer.MetricRecord.GET_CONTENT_SUMMARY, false, endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
+            status = OBSCommonUtils.getFileStatusWithRetry(this, f);
+        } catch (OBSFileConflictException e) {
             throw new AccessControlException(e);
         }
 
@@ -1706,34 +1856,41 @@ public class OBSFileSystem extends FileSystem {
                 .directoryCount(0)
                 .spaceConsumed(length)
                 .build();
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                    BasicMetricsConsumer.MetricRecord.GET_CONTENT_SUMMARY, true, endTime - startTime);
-
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
             return contentSummary;
         }
 
         // f is a directory
         if (enablePosix) {
-            contentSummary = OBSPosixBucketUtils.fsGetDirectoryContentSummary(this, OBSCommonUtils.pathToKey(this, f));
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                    BasicMetricsConsumer.MetricRecord.GET_CONTENT_SUMMARY, true, endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
+            contentSummary = null;
+            if (this.getConf()
+                .get(OBSConstants.OBS_CONTENT_SUMMARY_VERSION, OBSConstants.OBS_CONTENT_SUMMARY_VERSION_V2)
+                .equals(OBSConstants.OBS_CONTENT_SUMMARY_VERSION_V2)) {
+                boolean fallback = false;
+                try {
+                    contentSummary = OBSPosixBucketUtils.fsGetDirectoryContentSummaryV2(this, status);
+                    if (contentSummary.getFileCount() + contentSummary.getDirectoryCount()
+                        < OBSConstants.OBS_CONTENT_SUMMARY_FALLBACK_THRESHOLD) {
+                        fallback = true;
+                    }
+                } catch (OBSMethodNotAllowedException e) {
+                    LOG.debug("bucket[{}] not support fsGetDirectoryContentSummaryV2, fallback to V1, path={}, cause {}"
+                        , bucket, f.toString(), e.getMessage());
+                    fallback = true;
+                } catch (Exception e) {
+                    LOG.warn("fsGetDirectoryContentSummaryV2 failed with exception, fallback to V1, path={}, cause {}"
+                        , f.toString(), e.getMessage());
+                    fallback = true;
+                }
+
+                if (!fallback) {
+                    return contentSummary;
+                }
+                LOG.debug("fallback to getContentSummaryV1, path={}", f.toString());
             }
+            contentSummary = OBSPosixBucketUtils.fsGetDirectoryContentSummary(this, OBSCommonUtils.pathToKey(this, f));
             return contentSummary;
         } else {
             contentSummary = OBSObjectBucketUtils.getDirectoryContentSummary(this, OBSCommonUtils.pathToKey(this, f));
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                    BasicMetricsConsumer.MetricRecord.GET_CONTENT_SUMMARY, true, endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
             return contentSummary;
         }
     }
@@ -1754,23 +1911,9 @@ public class OBSFileSystem extends FileSystem {
     public void copyFromLocalFile(final boolean delSrc, final boolean overwrite, final Path src, final Path dst)
         throws FileAlreadyExistsException, IOException {
         checkOpen();
-        long startTime = System.currentTimeMillis();
-        long endTime;
         try {
             super.copyFromLocalFile(delSrc, overwrite, src, dst);
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                    BasicMetricsConsumer.MetricRecord.COPYFROMLOCAL, true, endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
         } catch (ObsException e) {
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                    BasicMetricsConsumer.MetricRecord.COPYFROMLOCAL, false, endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
             throw OBSCommonUtils.translateException("copyFromLocalFile(" + src + ", " + dst + ")", src, e);
         }
     }
@@ -1785,16 +1928,11 @@ public class OBSFileSystem extends FileSystem {
             // already closed
             return;
         }
-        long startTime = System.currentTimeMillis();
         closeAllFilesBeingWritten();
-
         closed = true;
-        long endTime = System.currentTimeMillis();
-        if (getMetricSwitch()) {
-            BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
-                BasicMetricsConsumer.MetricRecord.FS, BasicMetricsConsumer.MetricRecord.CLOSE, true,
-                endTime - startTime);
-            OBSCommonUtils.setMetricsInfo(this, record);
+
+        if (statsReporter != null) {
+            statsReporter.shutdownReport();
         }
 
         try {
@@ -1802,37 +1940,44 @@ public class OBSFileSystem extends FileSystem {
             if (metricsConsumer != null) {
                 metricsConsumer.close();
             }
-            obs.close();
+            if (obs != null) {
+                obs.close();
+            }
         } finally {
             OBSCommonUtils.shutdownAll(boundedMultipartUploadThreadPool, boundedCopyThreadPool, boundedDeleteThreadPool,
                 boundedCopyPartThreadPool, boundedListThreadPool);
         }
 
+        if (memArtsCCClient != null) {
+            memArtsCCClient.close();
+        }
+
         LOG.info("Finish closing filesystem instance for uri: {}", uri);
     }
 
+
+
     @Override
     public String getCanonicalServiceName() {
-        if (authorizer != null && authorizer instanceof DelegationTokenCapability) {
-            LOG.debug("getting CanonicalServiceName");
-            return ((DelegationTokenCapability)authorizer).getCanonicalServiceName();
-        } else if (enableCanonicalServiceName) {
-            // Does not support Token, only enable for HBase BulkLoad
-            return getScheme() + "://" + bucket;
-        }
-        return null;
+        return obsDelegationTokenManger != null
+            ? obsDelegationTokenManger.getCanonicalServiceName()
+            : getScheme() + "://" + bucket;
+    }
+
+    @Override
+    public Token<?>[] addDelegationTokens(String renewer, Credentials credentials) throws IOException {
+        LOG.info("add delegation tokens for renewer {}", renewer);
+        return obsDelegationTokenManger != null
+                ? obsDelegationTokenManger.addDelegationTokens(renewer, credentials)
+                : super.addDelegationTokens(renewer, credentials);
     }
 
     @Override
     public Token<?> getDelegationToken(String renewer) throws IOException {
-        if (authorizer != null && authorizer instanceof DelegationTokenCapability) {
-            long st = System.currentTimeMillis();
-            Token<?> delegationToken = ((DelegationTokenCapability) authorizer).getDelegationToken(renewer);
-            long et = System.currentTimeMillis();
-            LOG.debug("getDelegationToken:[renewer: {}], [cost: {}]", renewer, et - st);
-            return delegationToken;
-        }
-        return super.getDelegationToken(renewer);
+        LOG.info("get delegation tokens for renewer {}", renewer);
+        return obsDelegationTokenManger != null
+            ? obsDelegationTokenManger.getDelegationToken(renewer)
+            : super.getDelegationToken(renewer);
     }
 
     /**
@@ -1949,8 +2094,6 @@ public class OBSFileSystem extends FileSystem {
         throws FileNotFoundException, IOException {
         checkOpen();
         checkPermission(f,AccessType.READ);
-        long startTime = System.currentTimeMillis();
-        long endTime;
         RemoteIterator<LocatedFileStatus> locatedFileStatus;
         Path path = OBSCommonUtils.qualify(this, f);
 
@@ -1959,26 +2102,13 @@ public class OBSFileSystem extends FileSystem {
             // lookup dir triggers existence check
             final FileStatus fileStatus;
             try {
-                fileStatus = OBSCommonUtils.innerGetFileStatusWithRetry(this, path);
-            } catch (FileConflictException e) {
-                endTime = System.currentTimeMillis();
-                if (getMetricSwitch()) {
-                    BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                        BasicMetricsConsumer.MetricRecord.LIST_FILES, false, endTime - startTime);
-                    OBSCommonUtils.setMetricsInfo(this, record);
-                }
+                fileStatus = OBSCommonUtils.getFileStatusWithRetry(this, path);
+            } catch (OBSFileConflictException e) {
                 throw new AccessControlException(e);
             }
             if (fileStatus.isFile()) {
                 locatedFileStatus = new OBSListing.SingleStatusRemoteIterator(
                     OBSCommonUtils.toLocatedFileStatus(this, fileStatus));
-
-                endTime = System.currentTimeMillis();
-                if (getMetricSwitch()) {
-                    BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                        BasicMetricsConsumer.MetricRecord.LIST_FILES, true, endTime - startTime);
-                    OBSCommonUtils.setMetricsInfo(this, record);
-                }
                 // simple case: File
                 LOG.debug("Path is a file");
                 return locatedFileStatus;
@@ -1992,22 +2122,9 @@ public class OBSFileSystem extends FileSystem {
                     obsListing.createFileStatusListingIterator(path,
                         OBSCommonUtils.createListObjectsRequest(this, key, delimiter),
                         org.apache.hadoop.fs.obs.OBSListing.ACCEPT_ALL, new OBSListing.AcceptFilesOnly(path)));
-
-                endTime = System.currentTimeMillis();
-                if (getMetricSwitch()) {
-                    BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                        BasicMetricsConsumer.MetricRecord.LIST_FILES, true, endTime - startTime);
-                    OBSCommonUtils.setMetricsInfo(this, record);
-                }
                 return locatedFileStatus;
             }
         } catch (ObsException e) {
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                    BasicMetricsConsumer.MetricRecord.LIST_FILES, false, endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
             throw OBSCommonUtils.translateException("listFiles", path, e);
         }
     }
@@ -2049,21 +2166,13 @@ public class OBSFileSystem extends FileSystem {
         checkPermission(f,AccessType.READ);
         Path path = OBSCommonUtils.qualify(this, f);
         LOG.debug("listLocatedStatus({}, {}", path, filter);
-        long startTime = System.currentTimeMillis();
-        long endTime;
         RemoteIterator<LocatedFileStatus> locatedFileStatusRemoteList;
         try {
             // lookup dir triggers existence check
             final FileStatus fileStatus;
             try {
-                fileStatus = OBSCommonUtils.innerGetFileStatusWithRetry(this, path);
-            } catch (FileConflictException e) {
-                endTime = System.currentTimeMillis();
-                if (getMetricSwitch()) {
-                    BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                        BasicMetricsConsumer.MetricRecord.LIST_LOCATED_STS, false, endTime - startTime);
-                    OBSCommonUtils.setMetricsInfo(this, record);
-                }
+                fileStatus = OBSCommonUtils.getFileStatusWithRetry(this, path);
+            } catch (OBSFileConflictException e) {
                 throw new AccessControlException(e);
             }
 
@@ -2072,12 +2181,6 @@ public class OBSFileSystem extends FileSystem {
                 LOG.debug("Path is a file");
                 locatedFileStatusRemoteList = new OBSListing.SingleStatusRemoteIterator(
                     filter.accept(path) ? OBSCommonUtils.toLocatedFileStatus(this, fileStatus) : null);
-                endTime = System.currentTimeMillis();
-                if (getMetricSwitch()) {
-                    BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                        BasicMetricsConsumer.MetricRecord.LIST_LOCATED_STS, true, endTime - startTime);
-                    OBSCommonUtils.setMetricsInfo(this, record);
-                }
                 return locatedFileStatusRemoteList;
             } else {
                 // directory: trigger a lookup
@@ -2085,22 +2188,10 @@ public class OBSFileSystem extends FileSystem {
                 locatedFileStatusRemoteList = obsListing.createLocatedFileStatusIterator(
                     obsListing.createFileStatusListingIterator(path,
                         OBSCommonUtils.createListObjectsRequest(this, key, "/"), filter,
-                        new OBSListing.AcceptAllButSelfAndS3nDirs(path)));
-                endTime = System.currentTimeMillis();
-                if (getMetricSwitch()) {
-                    BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                        BasicMetricsConsumer.MetricRecord.LIST_LOCATED_STS, true, endTime - startTime);
-                    OBSCommonUtils.setMetricsInfo(this, record);
-                }
+                        new OBSListing.AcceptAllButSelfAndOBSDirs(path)));
                 return locatedFileStatusRemoteList;
             }
         } catch (ObsException e) {
-            endTime = System.currentTimeMillis();
-            if (getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                    BasicMetricsConsumer.MetricRecord.LIST_LOCATED_STS, false, endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(this, record);
-            }
             throw OBSCommonUtils.translateException("listLocatedStatus", path, e);
         }
     }
@@ -2135,5 +2226,53 @@ public class OBSFileSystem extends FileSystem {
 
     int getInvokeCountThreshold() {
         return invokeCountThreshold;
+    }
+
+    public TrafficStatistics getTrafficStatistics() {
+        return trafficStatistics;
+    }
+
+    /**
+     * Get disguise permission mode support stat.
+     *
+     * @return is disguise permission mode supported
+     */
+    boolean supportDisguisePermissionsMode() {
+        return OBSConstants.PERMISSIONS_MODE_DISGUISE.equals(permissionsMode) && enablePosix;
+    }
+
+    /**
+     * Set permission for given file.
+     *
+     * @param f the file to set permission info
+     * @param permission file's permission
+     * @throws IOException If an I/O error occurred
+     */
+    @Override
+    public void setPermission(final Path f, final FsPermission permission) throws IOException {
+        checkOpen();
+        checkPermission(f, AccessType.WRITE);
+        if (supportDisguisePermissionsMode()) {
+            LOG.debug("Set file {} permission to {}", f, permission);
+            OBSPosixBucketUtils.fsSetPermission(this, f, permission);
+        }
+    }
+
+    /**
+     * Set owner and group for given file.
+     *
+     * @param f the file to set owner and group info
+     * @param username file's owner
+     * @param groupname file's group
+     * @throws IOException If an I/O error occurred
+     */
+    @Override
+    public void setOwner(final Path f, final String username, final String groupname) throws IOException {
+        checkOpen();
+        checkPermission(f, AccessType.WRITE);
+        if (supportDisguisePermissionsMode()) {
+            LOG.debug("Set file {} owner to {} and group to {}", f , username, groupname);
+            OBSPosixBucketUtils.fsSetOwner(this, f, username, groupname);
+        }
     }
 }

@@ -51,7 +51,7 @@ class OBSFsDFSListing extends ObjectListing {
             if (resultQueue.isEmpty()) {
                 throw new IllegalArgumentException("result queue is empty, but marker is not empty: " + marker);
             } else if (resultQueue.peek().getType() == ListEntityType.LIST_TAIL) {
-                throw new RuntimeException("cannot put list tail (" + resultQueue.peek() + ") into result queue");
+                throw new IllegalStateException("cannot put list tail (" + resultQueue.peek() + ") into result queue");
             } else if (!marker.equals(resultQueue.peek().getType() == ListEntityType.COMMON_PREFIX
                 ? resultQueue.peek().getCommonPrefix()
                 : resultQueue.peek().getObjectSummary().getObjectKey())) {
@@ -68,13 +68,13 @@ class OBSFsDFSListing extends ObjectListing {
 
         // 3. check if list operation ends
         if (!listStack.empty() && resultQueue.isEmpty()) {
-            throw new RuntimeException("result queue is empty, but list stack is not empty: " + listStack);
+            throw new IllegalStateException("result queue is empty, but list stack is not empty: " + listStack);
         }
 
         String nextMarker = null;
         if (!resultQueue.isEmpty()) {
             if (resultQueue.peek().getType() == ListEntityType.LIST_TAIL) {
-                throw new RuntimeException("cannot put list tail (" + resultQueue.peek() + ") into result queue");
+                throw new IllegalStateException("cannot put list tail (" + resultQueue.peek() + ") into result queue");
             } else {
                 nextMarker = resultQueue.peek().getType() == ListEntityType.COMMON_PREFIX ? resultQueue.peek()
                     .getCommonPrefix() : resultQueue.peek().getObjectSummary().getObjectKey();
@@ -133,7 +133,7 @@ class OBSFsDFSListing extends ObjectListing {
                 continue;
             }
 
-            for (ObsObject extenedCommonPrefixes : oneLevelObjectListing.getExtenedCommonPrefixes()) {
+            for (ObsObject extenedCommonPrefixes : oneLevelObjectListing.getExtendCommonPrefixes()) {
                 if (extenedCommonPrefixes.getObjectKey().equals(oneLevelListRequests.get(i).getPrefix())) {
                     // skip prefix itself
                     continue;
@@ -285,9 +285,9 @@ class OBSFsDFSListing extends ObjectListing {
         while (!resultQueue.isEmpty() && resultNum < maxKeyNum) {
             ListEntity listEntity = resultQueue.poll();
             if (listEntity.getType() == ListEntityType.LIST_TAIL) {
-                throw new RuntimeException("cannot put list tail (" + listEntity + ") into result queue");
+                throw new IllegalStateException("cannot put list tail (" + listEntity + ") into result queue");
             } else if (listEntity.getType() == ListEntityType.COMMON_PREFIX) {
-                throw new RuntimeException("cannot put common prefix (" + listEntity + ") into result queue");
+                throw new IllegalStateException("cannot put common prefix (" + listEntity + ") into result queue");
             } else {
                 objectSummaries.add(listEntity.getObjectSummary());
                 increaseLevelStats(levelStatsList, listEntity.getLevel(),

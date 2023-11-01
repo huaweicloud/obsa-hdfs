@@ -41,29 +41,20 @@ import java.util.NoSuchElementException;
  * OBS listing implementation.
  */
 class OBSListing {
-    /**
-     * A Path filter which accepts all filenames.
-     */
     static final PathFilter ACCEPT_ALL = new PathFilter() {
-        @Override
-        public boolean accept(final Path file) {
-            return true;
-        }
-
         @Override
         public String toString() {
             return "ACCEPT_ALL";
         }
+
+        @Override
+        public boolean accept(final Path file) {
+            return true;
+        }
     };
 
-    /**
-     * Class logger.
-     */
     private static final Logger LOG = LoggerFactory.getLogger(OBSListing.class);
 
-    /**
-     * OBS File System instance.
-     */
     private final OBSFileSystem owner;
 
     OBSListing(final OBSFileSystem ownerFS) {
@@ -98,30 +89,27 @@ class OBSListing {
     }
 
     /**
-     * Interface to implement by the logic deciding whether to accept a summary
-     * entry or path as a valid file or directory.
+     * Used to decide whether a path (file or dir) should be accepted
      */
     interface FileStatusAcceptor {
 
         /**
-         * Predicate to decide whether or not to accept a summary entry.
+         * decide whether the summary entry should be accepted.
          *
-         * @param keyPath qualified path to the entry
+         * @param path    qualified path to the entry
          * @param summary summary entry
-         * @return true if the entry is accepted (i.e. that a status entry
-         * should be generated.
+         * @return true if the entry is accepted
          */
-        boolean accept(Path keyPath, ObsObject summary);
+        boolean accept(Path path, ObsObject summary);
 
         /**
-         * Predicate to decide whether or not to accept a prefix.
+         * decide whether the common prefix should be accepted.
          *
-         * @param keyPath      qualified path to the entry
+         * @param path         qualified path to the entry
          * @param commonPrefix the prefix
-         * @return true if the entry is accepted (i.e. that a status entry
-         * should be generated.)
+         * @return true if the entry is accepted
          */
-        boolean accept(Path keyPath, String commonPrefix);
+        boolean accept(Path path, String commonPrefix);
     }
 
     /**
@@ -202,14 +190,14 @@ class OBSListing {
          * Reject a summary entry if the key path is the qualified Path, or it
          * ends with {@code "_$folder$"}.
          *
-         * @param keyPath key path of the entry
+         * @param path    key path of the entry
          * @param summary summary entry
          * @return true if the entry is accepted (i.e. that a status entry
          * should be generated.
          */
         @Override
-        public boolean accept(final Path keyPath, final ObsObject summary) {
-            return !keyPath.equals(qualifiedPath) && !summary.getObjectKey().endsWith(OBSConstants.OBS_FOLDER_SUFFIX)
+        public boolean accept(final Path path, final ObsObject summary) {
+            return !path.equals(qualifiedPath) && !summary.getObjectKey().endsWith(OBSConstants.OBS_FOLDER_SUFFIX)
                 && !OBSCommonUtils.objectRepresentsDirectory(summary.getObjectKey(),
                 summary.getMetadata().getContentLength());
         }
@@ -217,12 +205,12 @@ class OBSListing {
         /**
          * Accept no directory paths.
          *
-         * @param keyPath qualified path to the entry
-         * @param prefix  common prefix in listing.
+         * @param path   qualified path to the entry
+         * @param prefix common prefix in listing.
          * @return false, always.
          */
         @Override
-        public boolean accept(final Path keyPath, final String prefix) {
+        public boolean accept(final Path path, final String prefix) {
             return false;
         }
     }
@@ -231,7 +219,7 @@ class OBSListing {
      * Accept all entries except the base path and those which map to OBS pseudo
      * directory markers.
      */
-    static class AcceptAllButSelfAndS3nDirs implements FileStatusAcceptor {
+    static class AcceptAllButSelfAndOBSDirs implements FileStatusAcceptor {
 
         /**
          * Base path.
@@ -243,7 +231,7 @@ class OBSListing {
          *
          * @param path an already-qualified path.
          */
-        AcceptAllButSelfAndS3nDirs(final Path path) {
+        AcceptAllButSelfAndOBSDirs(final Path path) {
             this.qualifiedPath = path;
         }
 
@@ -251,27 +239,27 @@ class OBSListing {
          * Reject a summary entry if the key path is the qualified Path, or it
          * ends with {@code "_$folder$"}.
          *
-         * @param keyPath key path of the entry
+         * @param path    key path of the entry
          * @param summary summary entry
          * @return true if the entry is accepted (i.e. that a status entry
          * should be generated.)
          */
         @Override
-        public boolean accept(final Path keyPath, final ObsObject summary) {
-            return !keyPath.equals(qualifiedPath) && !summary.getObjectKey().endsWith(OBSConstants.OBS_FOLDER_SUFFIX);
+        public boolean accept(final Path path, final ObsObject summary) {
+            return !path.equals(qualifiedPath) && !summary.getObjectKey().endsWith(OBSConstants.OBS_FOLDER_SUFFIX);
         }
 
         /**
          * Accept all prefixes except the one for the base path, "self".
          *
-         * @param keyPath qualified path to the entry
-         * @param prefix  common prefix in listing.
+         * @param path   qualified path to the entry
+         * @param prefix common prefix in listing.
          * @return true if the entry is accepted (i.e. that a status entry
          * should be generated.
          */
         @Override
-        public boolean accept(final Path keyPath, final String prefix) {
-            return !keyPath.equals(qualifiedPath);
+        public boolean accept(final Path path, final String prefix) {
+            return !path.equals(qualifiedPath);
         }
     }
 
@@ -350,14 +338,6 @@ class OBSListing {
             requestNextBatch();
         }
 
-        /**
-         * Report whether or not there is new data available. If there is data
-         * in the local filtered list, return true. Else: request more data util
-         * that condition is met, or there is no more remote listing data.
-         *
-         * @return true if a call to {@link #next()} will succeed.
-         * @throws IOException on any failure to request next batch
-         */
         @Override
         public boolean hasNext() throws IOException {
             return statusBatchIterator.hasNext() || requestNextBatch();
@@ -380,21 +360,13 @@ class OBSListing {
          * @throws IOException IO problems
          */
         private boolean requestNextBatch() throws IOException {
-            // look for more object listing batches being available
             while (source.hasNext()) {
-                // if available, retrieve it and build the next status
                 if (buildNextStatusBatch(source.next())) {
-                    // this batch successfully generated entries matching
-                    // the filters/acceptors;
-                    // declare that the request was successful
                     return true;
                 } else {
                     LOG.debug("All entries in batch were filtered...continuing");
                 }
             }
-            // if this code is reached, it means that all remaining
-            // object lists have been retrieved, and there are no new entries
-            // to return.
             return false;
         }
 
@@ -403,8 +375,9 @@ class OBSListing {
          *
          * @param objects the next object listing
          * @return true if this added any entries after filtering
+         * @throws IOException If an I/O error occurred
          */
-        private boolean buildNextStatusBatch(final ObjectListing objects) {
+        private boolean buildNextStatusBatch(final ObjectListing objects) throws IOException {
             // counters for debug logs
             int added = 0;
             int ignored = 0;
@@ -420,7 +393,7 @@ class OBSListing {
                 // Skip over keys that are ourselves and old OBS _$folder$ files
                 if (acceptor.accept(keyPath, summary) && filter.accept(keyPath)) {
                     FileStatus status = OBSCommonUtils.createFileStatus(keyPath, summary,
-                        owner.getDefaultBlockSize(keyPath), owner.getShortUserName());
+                        owner.getDefaultBlockSize(keyPath), owner);
                     LOG.debug("Adding: {}", status);
                     stats.add(status);
                     added++;
@@ -431,31 +404,31 @@ class OBSListing {
             }
 
             // prefixes: always directories
-            for (ObsObject prefix : objects.getExtenedCommonPrefixes()) {
+            for (ObsObject prefix : objects.getExtendCommonPrefixes()) {
                 String key = prefix.getObjectKey();
                 Path keyPath = OBSCommonUtils.keyToQualifiedPath(owner, key);
                 if (acceptor.accept(keyPath, key) && filter.accept(keyPath)) {
                     long lastModified = prefix.getMetadata().getLastModified() == null
                         ? System.currentTimeMillis()
                         : OBSCommonUtils.dateToLong(prefix.getMetadata().getLastModified());
-                    FileStatus status = new OBSFileStatus(keyPath, lastModified, lastModified,
+                    OBSFileStatus status = new OBSFileStatus(keyPath, lastModified, lastModified,
                         owner.getShortUserName());
-                    LOG.debug("Adding directory: {}", status);
+                    if (owner.supportDisguisePermissionsMode()) {
+                        OBSCommonUtils.setAccessControlAttrForFileStatus(owner, status,
+                            OBSCommonUtils.getObjectMetadata(owner, key));
+                    }
                     added++;
                     stats.add(status);
                 } else {
-                    LOG.debug("Ignoring directory: {}", keyPath);
                     ignored++;
                 }
             }
-
-            // finish up
             batchSize = stats.size();
             statusBatchIterator = stats.listIterator();
-            boolean hasNext = statusBatchIterator.hasNext();
-            LOG.debug("Added {} entries; ignored {}; hasNext={}; hasMoreObjects={}", added, ignored, hasNext,
-                objects.isTruncated());
-            return hasNext;
+            boolean ret = statusBatchIterator.hasNext();
+            LOG.debug("Added {}; ignored {}; hasNext={}; hasMoreObjects={}",
+                added, ignored, ret, objects.isTruncated());
+            return ret;
         }
 
         /**
@@ -531,25 +504,11 @@ class OBSListing {
             this.objects = OBSCommonUtils.listObjects(owner, request);
         }
 
-        /**
-         * Declare that the iterator has data if it is either is the initial
-         * iteration or it is a later one and the last listing obtained was
-         * incomplete.
-         */
         @Override
         public boolean hasNext() {
             return firstListing || objects.isTruncated();
         }
 
-        /**
-         * Ask for the next listing. For the first invocation, this returns the
-         * initial set, with no remote IO. For later requests, OBS will be
-         * queried, hence the calls may block or fail.
-         *
-         * @return the next object listing.
-         * @throws IOException            if a query made of OBS fails.
-         * @throws NoSuchElementException if there is no more data to list.
-         */
         @Override
         public ObjectListing next() throws IOException {
             if (firstListing) {

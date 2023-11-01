@@ -18,7 +18,6 @@
 
 package org.apache.hadoop.fs.obs;
 
-import com.google.common.base.Preconditions;
 import com.obs.services.exception.ObsException;
 
 import java.io.IOException;
@@ -26,27 +25,25 @@ import java.io.IOException;
 /**
  * IOException equivalent to {@link ObsException}.
  */
-public class OBSIOException extends IOException {
+public class OBSIOException extends IOException implements WithErrCode {
     private static final long serialVersionUID = -1582681108285856259L;
-
-    /**
-     * Peration message.
-     */
-    private final String operation;
+    private String errCode;
 
     OBSIOException(final String operationMsg, final ObsException cause) {
-        super(cause);
-        Preconditions.checkArgument(operationMsg != null, "Null 'operation' argument");
-        Preconditions.checkArgument(cause != null, "Null 'cause' argument");
-        this.operation = operationMsg;
+        super(operationMsg,cause);
     }
 
-    public ObsException getCause() {
+    public synchronized ObsException getCause() {
         return (ObsException) super.getCause();
     }
 
-    @Override
-    public String getMessage() {
-        return operation + ": " + getCause().getErrorMessage() + ", detailMessage: " + super.getMessage();
+    public void setErrCode(String errCode) {
+        this.errCode = errCode;
     }
+
+    @Override
+    public String getErrCode() {
+        return this.errCode;
+    }
+
 }

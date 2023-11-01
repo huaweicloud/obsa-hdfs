@@ -430,6 +430,13 @@ public final class OBSConstants {
      */
     static final String USER_AGENT_PREFIX = "fs.obs.user.agent.prefix";
 
+    public static final String DELEGATION_TOKEN_ONLY  = "fs.obs.delegation.token.only";
+
+    public static final boolean DEFAULT_DELEGATION_TOKEN_ONLY  = false;
+
+    public static final String DELEGATION_TOKEN_PROVIDERS  = "fs.obs.delegation.token.providers";
+
+    public static final String DEFAULT_DELEGATION_TOKEN_PROVIDERS  = "";
     /**
      * what read policy to use. Default is {@link #READAHEAD_POLICY_PRIMARY} Value:
      * {@value}
@@ -443,6 +450,17 @@ public final class OBSConstants {
     @InterfaceStability.Unstable
     public static final String READAHEAD_POLICY_ADVANCE = "advance";
 
+    @InterfaceStability.Unstable
+    public static final String READAHEAD_POLICY_MEMARTSCC = "memArtsCC";
+
+    public static final String MEMARTSCC_LOCALITY_ENABLE = "fs.obs.memartscc.locality.enable";
+
+    public static final String CACHE_CONFIG_PREFIX = "fs.obs.cache.config.prefix";
+
+    public static final String DEFAULT_CACHE_CONFIG_PREFIX = "fs.obs.memartscc.config";
+
+    public static final boolean DEFAULT_MEMARTSCC_LOCALITY_ENABLE = false;
+
     /**
      * Read ahead buffer size to prevent connection re-establishments.
      */
@@ -453,9 +471,69 @@ public final class OBSConstants {
      */
     public static final long DEFAULT_READAHEAD_RANGE = 1024 * 1024;
 
+    /**
+     * the prefetch range sent to memartscc
+     */
+    public static final String MEMARTSCC_READAHEAD_RANGE = "fs.obs.memartscc.readahead.range";
+
+    public static final long DEFAULT_MEMARTSCC_READAHEAD_RANGE = 8 * 1024 * 1024;
+
+    public static final String MEMARTSCC_BUFFER_SIZE = "fs.obs.memartscc.buffer.size";
+
+    public static final int DEFAULT_MEMARTSCC_BUFFER_SIZE = 8192;
+
+    public static final String MEMARTSCC_DIRECTBUFFER_SIZE = "fs.obs.memartscc.directbuffer.size";
+
+    public static final int DEFAULT_MEMARTSCC_DIRECTBUFFER_SIZE = 1024 * 1024;
+
+    public static final String MEMARTSCC_AKSK_REFRESH_INTERVAL = "fs.obs.memartscc.aksk.refresh.interval";
+
+    public static final int DEFAULT_MEMARTSCC_AKSK_REFRESH_INTERVAL = 60; // 60 sec
+
+    public static final String MEMARTSCC_CACHE_IMPL = "fs.obs.memartscc.cache.impl";
+
     public static final String READAHEAD_MAX_NUM = "fs.obs.readahead.max.number";
 
     public static final int DEFAULT_READAHEAD_MAX_NUM = 4;
+
+    public static final String MEMARTSCC_INPUTSTREAM_BUFFER_TYPE = "fs.obs.memartscc.inputstream.buffer.type";
+
+    public static final String MEMARTSCC_INPUTSTREAM_BUFFER_TYPE_BIND = "bind";
+
+    public static final String MEMARTSCC_INPUTSTREAM_BUFFER_TYPE_POOL = "pool";
+
+    public static final String MEMARTSCC_INPUTSTREAM_BUFFER_POOL_MAX_SIZE = "fs.obs.memartscc.inputstream.buffer.pool.maxsize";
+
+    public static final int MEMARTSCC_INPUTSTREAM_BUFFER_POOL_DEFAULT_MAX_SIZE = 128;
+
+    public static final String MEMARTSCC_INPUTSTREAM_BUFFER_BORROW_TIMEOUT = "fs.obs.memartscc.inputstream.buffer.poll.timeout";
+
+    public static final int MEMARTSCC_INPUTSTREAM_BUFFER_BORROW_DEFAULT_TIMEOUT = 5000; // ms
+
+    public static final String MEMARTSCC_PYSPARK_OPTIMIZED = "fs.obs.memartscc.pyspark.optimized";
+
+    public static final boolean DEFAULT_MEMARTSCC_PYSPARK_OPTIMIZED = true;
+
+    public static final String MEMARTSCC_TRAFFIC_REPORT_ENABLE = "fs.obs.memartscc.inputstream.statistics.report.enable";
+
+    public static final boolean DEFAULT_MEMARTSCC_TRAFFIC_REPORT_ENABLE = false;
+
+    /**
+     * The interval of reporting traffic statistics to CC SDK, unit: seconds
+     */
+    public static final String MEMARTSCC_TRAFFIC_REPORT_INTERVAL = "fs.obs.memartscc.inputstream.statistics.report.interval";
+
+    public static final long MEMARTSCC_TRAFFIC_REPORT_DEFAULT_INTERVAL = 30;
+
+    /*
+    * memartscc duplications num, set to 1 for now
+    * */
+    public static final int MAX_DUPLICATION_NUM = 1;
+
+    /*
+     * memartscc errorcode getShardInfo success
+     * */
+    public static final int GET_SHARD_INFO_SUCCESS = 0;
 
     /**
      * Flag indicating if
@@ -465,6 +543,21 @@ public final class OBSConstants {
      * byte[], int, int)}.
      */
     public static final String READAHEAD_TRANSFORM_ENABLE = "fs.obs.read.transform.enable";
+
+    /**
+     * obs file system permission mode settings, only take effect on posix file system.
+     */
+    public static final String PERMISSIONS_MODE = "fs.obs.permissions.mode";
+
+    /**
+     * default permission mode, doesn't support permissions.
+     */
+    public static final String DEFAULT_PERMISSIONS_MODE = "none";
+
+    /**
+     * disguise permission mode, support file owner, group, permission attribute.
+     */
+    public static final String PERMISSIONS_MODE_DISGUISE = "disguise";
 
     /**
      * OBS client factory implementation class.
@@ -654,29 +747,47 @@ public final class OBSConstants {
     static final int DEFAULT_LIST_PARALLEL_FACTOR = 30;
 
     /**
+     * Multi list contentsummary parallel factor
+     */
+    static final String MULTILISTCS_PARALLEL_FACTOR = "fs.obs.multilistcs.parallel.factor";
+
+    /**
+     * Default value of {@link #MULTILISTCS_PARALLEL_FACTOR}.
+     */
+    static final int DEFAULT_MULTILISTCS_PARALLEL_FACTOR = 30;
+
+    /**
      * Switch for the fast delete.
      */
-    static final String TRASH_ENABLE = "fs.obs.trash.enable";
+    static final String FAST_DELETE_ENABLE = "fs.obs.trash.enable";
+
+    /**
+     * Default trash : false.
+     */
+    static final boolean DEFAULT_FAST_DELETE_ENABLE = false;
+
+    /**
+     * The fast delete recycle directory.
+     */
+    static final String FAST_DELETE_DIR = "fs.obs.trash.dir";
 
     /**
      * Enable obs content summary or not.
      */
     static final String OBS_CONTENT_SUMMARY_ENABLE = "fs.obs.content.summary.enable";
 
+    static final String OBS_CONTENT_SUMMARY_VERSION = "fs.obs.content.summary.version";
+
+    static final String OBS_CONTENT_SUMMARY_VERSION_V1 = "1";
+
+    static final String OBS_CONTENT_SUMMARY_VERSION_V2 = "2";
+
+    static final int OBS_CONTENT_SUMMARY_FALLBACK_THRESHOLD = 1000;
+
     /**
      * Enable obs client dfs list or not.
      */
     static final String OBS_CLIENT_DFS_LIST_ENABLE = "fs.obs.client.dfs.list.enable";
-
-    /**
-     * Default trash : false.
-     */
-    static final boolean DEFAULT_TRASH = false;
-
-    /**
-     * The fast delete recycle directory.
-     */
-    static final String TRASH_DIR = "fs.obs.trash.dir";
 
     /**
      * Encryption type is sse-kms or sse-c.
@@ -744,12 +855,38 @@ public final class OBSConstants {
      */
     static final boolean DEFAULT_GET_CANONICAL_SERVICE_NAME_ENABLE = false;
 
-    static final String MAX_TIME_IN_MILLISECOND_TO_RETRY = "fs.obs.retry.maxtime";
+    static final String RETRY_MAXTIME = "fs.obs.retry.maxtime";
 
-    /**
-     * Default value of {@link #MAX_TIME_IN_MILLISECOND_TO_RETRY}
-     */
-    static final long DEFAULT_TIME_IN_MILLISECOND_TO_RETRY = 180000;
+    static final long DEFAULT_RETRY_MAXTIME = 180000;
+
+    static final String RETRY_SLEEP_BASETIME = "fs.obs.retry.sleep.basetime";
+
+    static final long DEFAULT_RETRY_SLEEP_BASETIME = 50;
+
+    static final String RETRY_SLEEP_MAXTIME = "fs.obs.retry.sleep.maxtime";
+
+    static final long DEFAULT_RETRY_SLEEP_MAXTIME = 30000;
+
+
+    static final String RETRY_QOS_MAXTIME = "fs.obs.retry.qos.maxtime";
+
+    static final long DEFAULT_RETRY_QOS_MAXTIME = 180000;
+
+    static final String RETRY_QOS_SLEEP_BASETIME = "fs.obs.retry.qos.sleep.basetime";
+
+    static final long DEFAULT_RETRY_QOS_SLEEP_BASETIME = 1000;
+
+    static final String RETRY_QOS_SLEEP_MAXTIME = "fs.obs.retry.qos.sleep.maxtime";
+
+    static final long DEFAULT_RETRY_QOS_SLEEP_MAXTIME = 30000;
+
+    public static final String RETRY_LIMIT = "fs.obs.retry.limit";
+
+    public static final int DEFAULT_RETRY_LIMIT = 7;
+
+    public static final String RETRY_QOS_LIMIT = "fs.obs.retry.qos.limit";
+
+    public static final int DEFAULT_RETRY_QOS_LIMIT = 7;
 
     /**
      * File visibility after create interface switch.
@@ -764,10 +901,10 @@ public final class OBSConstants {
 
     public static final String AUTHORIZER_PROVIDER = "fs.obs.authorize.provider";
 
-    public static final String  AUTHORIZE_FAIL_FALLBACK= "fs.obs.authorize.fail.fallback";
+    public static final String  AUTHORIZE_FAIL_FALLBACK = "fs.obs.authorize.fail.fallback";
     public static final boolean DEFAULT_AUTHORIZE_FAIL_FALLBACK = false;
 
-    public static final String  AUTHORIZE_EXCEPTION_FALLBACK= "fs.obs.authorize.exception.fallback";
+    public static final String  AUTHORIZE_EXCEPTION_FALLBACK = "fs.obs.authorize.exception.fallback";
     public static final boolean DEFAULT_AUTHORIZE_EXCEPTION_FALLBACK = true;
 
     /**
@@ -797,6 +934,48 @@ public final class OBSConstants {
     static final String OUTPUT_STREAM_HFLUSH_POLICY_FLUSH = "flush"; // downgrade hflush/hsync to the buffer's flush
 
     static final String OUTPUT_STREAM_HFLUSH_POLICY_EMPTY = "empty"; // downgrade hflush/hsync to empty func, which means calling hflush/hsync will do nothing
+
+    static final String OUTPUT_STREAM_ATTACH_MD5 = "fs.obs.outputstream.attach.md5";
+
+    static final Boolean DEFAULT_OUTPUT_STREAM_ATTACH_MD5 = false;
+
+    /**
+     * Use which type to validate consistency of uploaded block data. Default value is {@link #FAST_UPLOAD_CHECKSUM_TYPE_NONE}.
+     * Normally replace {@link #OUTPUT_STREAM_ATTACH_MD5}.
+     * Recommend {@link #FAST_UPLOAD_CHECKSUM_TYPE_SHA256} for more secure.
+     */
+    static final String FAST_UPLOAD_CHECKSUM_TYPE = "fs.obs.fast.upload.checksum.type";
+
+    static final String FAST_UPLOAD_CHECKSUM_TYPE_NONE = "none";
+
+    static final String FAST_UPLOAD_CHECKSUM_TYPE_MD5 = "md5";
+
+    static final String FAST_UPLOAD_CHECKSUM_TYPE_SHA256 = "sha256";
+
+    static final String OUTPUT_STREAM_DISK_FORCE_FLUSH = "fs.obs.outputstream.disk.force.flush";
+
+    static final Boolean DEFAULT_OUTPUT_STREAM_DISK_FORCE_FLUSH = true;
+
+    static final String FAST_DELETE_VERSION = "fs.obs.fast.delete.version";
+
+    static final String FAST_DELETE_VERSION_V1 = "1";
+
+    static final String FAST_DELETE_VERSION_V2 = "2";
+
+    static final String FAST_DELETE_VERSION_V2_CHECKPOINT_FORMAT = "yyyyMMddHH";
+
+    /**
+     * Determines the HDFS trash behavior. Default value is {@link #HDFS_TRASH_VERSION_V1}.
+     */
+    static final String HDFS_TRASH_VERSION = "fs.obs.hdfs.trash.version";
+
+    static final String HDFS_TRASH_VERSION_V1 = "1";
+
+    static final String HDFS_TRASH_VERSION_V2 = "2";
+
+    static final String HDFS_TRASH_PREFIX = "fs.obs.hdfs.trash.prefix";
+
+    static final String DEFAULT_HDFS_TRASH_PREFIX = "/user/.Trash";
 
     private OBSConstants() {
     }

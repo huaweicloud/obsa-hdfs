@@ -106,27 +106,11 @@ final class BlockingThreadPoolExecutorService extends SemaphoredDelegatingExecut
         };
     }
 
-    /**
-     * A thread pool that that blocks clients submitting additional tasks if
-     * there are already {@code activeTasks} running threads and {@code
-     * waitingTasks} tasks waiting in its queue.
-     *
-     * @param activeTasks   maximum number of active tasks
-     * @param waitingTasks  maximum number of waiting tasks
-     * @param keepAliveTime time until threads are cleaned up in seconds
-     * @param prefixName    prefix of name for threads
-     * @return new instance of BlockingThreadPoolExecutorService
-     */
     static BlockingThreadPoolExecutorService newInstance(final int activeTasks, final int waitingTasks,
         final long keepAliveTime, final String prefixName) {
-
-    /* Although we generally only expect up to waitingTasks tasks in the
-    queue, we need to be able to buffer all tasks in case dequeueing is
-    slower than enqueueing. */
         final BlockingQueue<Runnable> workQueue = new LinkedBlockingQueue<>(waitingTasks + activeTasks);
         ThreadPoolExecutor eventProcessingExecutor = new ThreadPoolExecutor(activeTasks, activeTasks, keepAliveTime,
             TimeUnit.SECONDS, workQueue, newDaemonThreadFactory(prefixName), (r, executor) -> {
-            // This is not expected to happen.
             LOG.error("Could not submit task to executor {}", executor.toString());
         });
         eventProcessingExecutor.allowCoreThreadTimeOut(true);

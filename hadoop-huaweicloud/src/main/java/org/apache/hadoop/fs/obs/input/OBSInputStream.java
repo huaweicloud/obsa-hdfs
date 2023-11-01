@@ -6,7 +6,6 @@ import com.obs.services.exception.ObsException;
 import com.obs.services.model.GetObjectRequest;
 import com.sun.istack.NotNull;
 
-import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
 import org.apache.hadoop.fs.ByteBufferReadable;
@@ -14,11 +13,10 @@ import org.apache.hadoop.fs.CanSetReadahead;
 import org.apache.hadoop.fs.FSExceptionMessages;
 import org.apache.hadoop.fs.FSInputStream;
 import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.obs.BasicMetricsConsumer;
 import org.apache.hadoop.fs.obs.OBSCommonUtils;
 import org.apache.hadoop.fs.obs.OBSConstants;
 import org.apache.hadoop.fs.obs.OBSFileSystem;
-import org.apache.hadoop.fs.obs.OBSIOException;
+import org.apache.hadoop.fs.obs.OBSOperateAction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -51,7 +49,7 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead, By
     /**
      * Class logger.
      */
-    public static final Logger LOG = LoggerFactory.getLogger(OBSInputStream.class);
+    private static final Logger LOG = LoggerFactory.getLogger(OBSInputStream.class);
 
     /**
      * The statistics for OBS file system.
@@ -130,8 +128,8 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead, By
     OBSInputStream(final String bucketName, final String bucketKey, final long fileStatusLength,
         final ObsClient obsClient, final FileSystem.Statistics stats, final long readAheadRangeValue,
         final OBSFileSystem obsFileSystem) {
-        Preconditions.checkArgument(StringUtils.isNotEmpty(bucketName), "No Bucket");
-        Preconditions.checkArgument(StringUtils.isNotEmpty(bucketKey), "No Key");
+        Preconditions.checkArgument(OBSCommonUtils.isStringNotEmpty(bucketName), "No Bucket");
+        Preconditions.checkArgument(OBSCommonUtils.isStringNotEmpty(bucketKey), "No Key");
         Preconditions.checkArgument(fileStatusLength >= 0, "Negative content length");
         this.bucket = bucketName;
         this.key = bucketKey;
@@ -160,6 +158,11 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead, By
         return Math.min(contentLength, length < 0 ? contentLength : targetPos + Math.max(readahead, length));
     }
 
+    protected long calculateOBSTraffic(final long targetPos, final long length) {
+        long contentRangeEnd = Math.min(contentLength, length < 0 ? contentLength : targetPos + Math.max(readAheadRange, length));
+        return contentRangeEnd - targetPos;
+    }
+
     /**
      * Opens up the stream at specified target position and for given length.
      *
@@ -168,7 +171,8 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead, By
      * @param length    length requested
      * @throws IOException on any failure to open the object
      */
-    private synchronized void reopen(final String reason, final long targetPos, final long length) throws IOException {
+    protected synchronized void reopen(final String reason, final long targetPos, final long length)
+        throws IOException {
         long startTime = System.currentTimeMillis();
         long threadId = Thread.currentThread().getId();
         if (wrappedStream != null) {
@@ -211,17 +215,21 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead, By
     public synchronized void seek(final long targetPos) throws IOException {
         fs.checkOpen();
         checkStreamOpen();
-
-        // Do not allow negative seek
         if (targetPos < 0) {
-            throw new EOFException(FSExceptionMessages.NEGATIVE_SEEK + " " + targetPos);
+            EOFException eof = new EOFException(String.format("%s %s", FSExceptionMessages.NEGATIVE_SEEK, targetPos));
+            OBSCommonUtils.setMetricsAbnormalInfo(fs, OBSOperateAction.lazySeek, eof);
+            throw eof;
+        }
+
+        if (targetPos > contentLength) {
+            EOFException eof = new EOFException(String.format("%s %s", FSExceptionMessages.CANNOT_SEEK_PAST_EOF, targetPos));
+            OBSCommonUtils.setMetricsAbnormalInfo(fs, OBSOperateAction.lazySeek, eof);
+            throw eof;
         }
 
         if (this.contentLength <= 0) {
             return;
         }
-
-        // Lazy seek
         nextReadPos = targetPos;
     }
 
@@ -250,22 +258,14 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead, By
         if (wrappedStream == null) {
             return;
         }
-        // compute how much more to skip
         long diff = targetPos - streamCurrentPos;
         if (diff > 0) {
-            // forward seek -this is where data can be skipped
-
             int available = wrappedStream.available();
-            // always seek at least as far as what is available
             long forwardSeekRange = Math.max(readAheadRange, available);
-            // work out how much is actually left in the stream
-            // then choose whichever comes first: the range or the EOF
             long remainingInCurrentRequest = remainingInCurrentRequest();
-
             long forwardSeekLimit = Math.min(remainingInCurrentRequest, forwardSeekRange);
             boolean skipForward = remainingInCurrentRequest > 0 && diff <= forwardSeekLimit;
             if (skipForward) {
-                // the forward seek range is within the limits
                 LOG.debug("Forward seek on {}, of {} bytes", uri, diff);
                 long skippedOnce = wrappedStream.skip(diff);
                 while (diff > 0 && skippedOnce > 0) {
@@ -276,22 +276,14 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead, By
                 }
 
                 if (streamCurrentPos == targetPos) {
-                    // all is well
                     return;
                 } else {
-                    // log a warning; continue to attempt to re-open
                     LOG.info("Failed to seek on {} to {}. Current position {}", uri, targetPos, streamCurrentPos);
                 }
             }
         } else if (diff == 0 && remainingInCurrentRequest() > 0) {
-            // targetPos == streamCurrentPos
-            // if there is data left in the stream, keep going
             return;
         }
-
-        // if the code reaches here, the stream needs to be reopened.
-        // close the stream; if read the object will be opened at the
-        // new streamCurrentPos
         closeStream("seekInStream()", this.contentRangeFinish);
         streamCurrentPos = targetPos;
     }
@@ -311,58 +303,19 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead, By
      * @throws IOException on any failure to lazy seek
      */
     private void lazySeek(final long targetPos, final long len) throws IOException {
-        int retryTime = 0;
-        long delayMs;
-        long startTime = System.currentTimeMillis();
-        while (System.currentTimeMillis() - startTime <= OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY) {
+        OBSCommonUtils.getOBSInvoker().retryByMaxTime(OBSOperateAction.lazySeek, key, () -> {
             try {
-                // For lazy seek
                 seekInStream(targetPos);
             } catch (IOException e) {
                 if (wrappedStream != null) {
                     closeStream("lazySeek() seekInStream has exception ", this.contentRangeFinish);
                 }
-
-                LOG.warn("IOException occurred in lazySeek, retry: {}", retryTime, e);
-                delayMs = OBSCommonUtils.getSleepTimeInMs(retryTime);
-                retryTime++;
-                if (System.currentTimeMillis() - startTime + delayMs
-                    < OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY) {
-                    try {
-                        Thread.sleep(delayMs);
-                    } catch (InterruptedException ie) {
-                        throw e;
-                    }
-                } else {
-                    throw e;
-                }
-
-                continue;
             }
-
-            try {
-                // re-open at specific location if needed
-                if (wrappedStream == null) {
-                    reopen("read from new offset", targetPos, len);
-                }
-
-                return;
-            } catch (OBSIOException e) {
-                LOG.debug("IOException occurred in lazySeek, retry: {}", retryTime, e);
-                delayMs = OBSCommonUtils.getSleepTimeInMs(retryTime);
-                retryTime++;
-                if (System.currentTimeMillis() - startTime + delayMs
-                    < OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY) {
-                    try {
-                        Thread.sleep(delayMs);
-                    } catch (InterruptedException ie) {
-                        throw e;
-                    }
-                } else {
-                    throw e;
-                }
+            if (wrappedStream == null) {
+                reopen("read from new offset", targetPos, len);
             }
-        }
+            return null;
+        },true);
     }
 
     /**
@@ -377,15 +330,6 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead, By
         }
     }
 
-    private void sleepInLock(long sleepTime) throws InterruptedException {
-        long start = System.currentTimeMillis();
-        long now = start;
-        while (now - start < sleepTime) {
-            wait(start + sleepTime - now);
-            now = System.currentTimeMillis();
-        }
-    }
-
     @Override
     public synchronized int read() throws IOException {
         fs.checkOpen();
@@ -393,82 +337,55 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead, By
         long startTime = System.currentTimeMillis();
         long threadId = Thread.currentThread().getId();
         long endTime;
-        boolean isTrue = this.contentLength == 0 || nextReadPos >= contentLength;
 
+        boolean isTrue = this.contentLength == 0 || nextReadPos >= contentLength;
         if (isTrue) {
             return -1;
         }
 
-        int byteRead = -1;
         try {
             lazySeek(nextReadPos, 1);
         } catch (EOFException e) {
             onReadFailure(e, 1);
             return -1;
+        } catch (IOException e) {
+            OBSCommonUtils.setMetricsAbnormalInfo(fs, OBSOperateAction.readOneByte,e);
+            throw e;
         }
 
-        IOException exception = null;
-        int retryTime = 0;
-        long delayMs;
-        long retryStartTime = System.currentTimeMillis();
-        do {
-            try {
-                byteRead = wrappedStream.read();
-                exception = null;
-                break;
-            } catch (EOFException e) {
-                onReadFailure(e, 1);
-                return -1;
-            } catch (IOException e) {
-                exception = e;
-                onReadFailure(e, 1);
-                LOG.debug("read of [{}] failed, retry time[{}], due to exception[{}]", uri, retryTime, e);
-                delayMs = OBSCommonUtils.getSleepTimeInMs(retryTime);
-                retryTime++;
-                if (System.currentTimeMillis() - startTime + delayMs
-                    < OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY) {
-                    try {
-                        sleepInLock(delayMs);
-                    } catch (InterruptedException ie) {
-                        LOG.error("read of [{}] failed, retry time[{}], due to " + "exception[{}]", uri, retryTime, e);
-                        throw e;
-                    }
+        try {
+            int byteRead = OBSCommonUtils.getOBSInvoker().retryByMaxTime(OBSOperateAction.readOneByte, key, () -> {
+                int b;
+                try {
+                    b = wrappedStream.read();
+                } catch (EOFException e) {
+                    onReadFailure(e, 1);
+                    return -1;
+                } catch (IOException e) {
+                    onReadFailure(e, 1);
+                    throw e;
                 }
-            }
-        } while (System.currentTimeMillis() - retryStartTime <= OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY);
+                return b;
+            }, true);
 
-        if (exception != null) {
+            if (byteRead >= 0) {
+                streamCurrentPos++;
+                nextReadPos++;
+            }
+
+            if (byteRead >= 0) {
+                incrementBytesRead(1);
+            }
+
             endTime = System.currentTimeMillis();
-            if (fs.getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
-                    BasicMetricsConsumer.MetricRecord.BYTEBUF, BasicMetricsConsumer.MetricRecord.READ, false,
-                    endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(fs, record);
-            }
-            LOG.error("read of [{}] failed, retry time[{}], due to exception[{}]", uri, retryTime, exception);
-            throw exception;
+            long position = byteRead >= 0 ? nextReadPos - 1 : nextReadPos;
+            LOG.debug("read-0arg uri:{}, contentLength:{}, position:{}, readValue:{}, " + "thread:{}, timeUsedMilliSec:{}",
+                    uri, contentLength, position, byteRead, threadId, endTime - startTime);
+            return byteRead;
+        } catch (IOException e) {
+            OBSCommonUtils.setMetricsAbnormalInfo(fs, OBSOperateAction.readOneByte,e);
+            throw e;
         }
-
-        if (byteRead >= 0) {
-            streamCurrentPos++;
-            nextReadPos++;
-        }
-
-        if (byteRead >= 0) {
-            incrementBytesRead(1);
-        }
-
-        endTime = System.currentTimeMillis();
-        long position = byteRead >= 0 ? nextReadPos - 1 : nextReadPos;
-        if (fs.getMetricSwitch()) {
-            BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
-                BasicMetricsConsumer.MetricRecord.ONEBYTE, BasicMetricsConsumer.MetricRecord.READ, true,
-                endTime - startTime);
-            OBSCommonUtils.setMetricsInfo(fs, record);
-        }
-        LOG.debug("read-0arg uri:{}, contentLength:{}, position:{}, readValue:{}, " + "thread:{}, timeUsedMilliSec:{}",
-            uri, contentLength, position, byteRead, threadId, endTime - startTime);
-        return byteRead;
     }
 
     /**
@@ -481,27 +398,10 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead, By
      */
     private synchronized void onReadFailure(final IOException ioe, final int length) throws IOException {
         LOG.debug("Got exception while trying to read from stream {}" + " trying to recover: " + ioe, uri);
-        int retryTime = 0;
-        long delayMs;
-        long startTime = System.currentTimeMillis();
-        while (System.currentTimeMillis() - startTime <= OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY) {
-            try {
-                reopen("failure recovery", streamCurrentPos, length);
-                return;
-            } catch (OBSIOException e) {
-                LOG.debug("OBSIOException occurred in reopen for failure recovery, " + "the {} retry time", retryTime,
-                    e);
-                delayMs = OBSCommonUtils.getSleepTimeInMs(retryTime);
-                retryTime++;
-                try {
-                    sleepInLock(delayMs);
-                } catch (InterruptedException ie) {
-                    throw e;
-                }
-            }
-        }
-
-        reopen("failure recovery", streamCurrentPos, length);
+        OBSCommonUtils.getOBSInvoker().retryByMaxTime(OBSOperateAction.onReadFailure, key, () -> {
+            reopen("failure recovery", streamCurrentPos, length);
+            return null;
+        },true);
     }
 
     @Override
@@ -517,7 +417,6 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead, By
         if (len == 0) {
             return 0;
         }
-
         byte[] buf = new byte[len];
         boolean isTrue = this.contentLength == 0 || nextReadPos >= contentLength;
         if (isTrue) {
@@ -530,76 +429,46 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead, By
             onReadFailure(e, len);
             // the end of the file has moved
             return -1;
+        } catch (IOException e) {
+            OBSCommonUtils.setMetricsAbnormalInfo(fs, OBSOperateAction.readByteBuff,e);
+            throw e;
         }
 
-        int bytesRead = 0;
-        IOException exception = null;
-        int retryTime = 0;
-        long delayMs;
-        long startRetryTime = System.currentTimeMillis();
-        do {
-            try {
-                bytesRead = tryToReadFromInputStream(wrappedStream, buf, 0, len);
-                if (bytesRead == -1) {
-                    return -1;
-                }
-                exception = null;
-                break;
-            } catch (EOFException e) {
-                onReadFailure(e, len);
-                return -1;
-            } catch (IOException e) {
-                exception = e;
-                onReadFailure(e, len);
-                LOG.debug("read len[{}] of [{}] failed, retry time[{}], " + "due to exception[{}]", len, uri, retryTime,
-                    exception);
-                delayMs = OBSCommonUtils.getSleepTimeInMs(retryTime);
-                retryTime++;
-                if (System.currentTimeMillis() - startTime + delayMs
-                    < OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY) {
-                    try {
-                        sleepInLock(delayMs);
-                    } catch (InterruptedException ie) {
-                        LOG.error("read len[{}] of [{}] failed, retry time[{}], " + "due to exception[{}]", len, uri,
-                            retryTime, exception);
-                        throw exception;
+        try {
+            int bytesRead = OBSCommonUtils.getOBSInvoker().retryByMaxTime(OBSOperateAction.readByteBuff, key, () -> {
+                int count;
+                try {
+                    count = tryToReadFromInputStream(wrappedStream, buf, 0, len);
+                    if (count == -1) {
+                        return -1;
                     }
+                } catch (EOFException e) {
+                    onReadFailure(e, len);
+                    return -1;
+                } catch (IOException e) {
+                    onReadFailure(e, len);
+                    throw e;
                 }
+                return count;
+            }, true);
+
+            if (bytesRead > 0) {
+                streamCurrentPos += bytesRead;
+                nextReadPos += bytesRead;
+                byteBuffer.put(buf, 0, bytesRead);
             }
-        } while (System.currentTimeMillis() - startRetryTime <= OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY);
-        if (exception != null) {
+            incrementBytesRead(bytesRead);
+            long position = bytesRead >= 0 ? nextReadPos - 1 : nextReadPos;
             endTime = System.currentTimeMillis();
-            if (fs.getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
-                    BasicMetricsConsumer.MetricRecord.BYTEBUF, BasicMetricsConsumer.MetricRecord.READ, false,
+
+            LOG.debug("Read-ByteBuffer uri:{}, contentLength:{}, destLen:{}, readLen:{}, "
+                            + "position:{}, thread:{}, timeUsedMilliSec:{}", uri, contentLength, len, bytesRead, position, threadId,
                     endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(fs, record);
-            }
-
-            LOG.error("read len[{}] of [{}] failed, retry time[{}], " + "due to exception[{}]", len, uri, retryTime,
-                exception);
-            throw exception;
+            return bytesRead;
+        } catch (IOException e) {
+            OBSCommonUtils.setMetricsAbnormalInfo(fs, OBSOperateAction.readByteBuff,e);
+            throw e;
         }
-
-        if (bytesRead > 0) {
-            streamCurrentPos += bytesRead;
-            nextReadPos += bytesRead;
-            byteBuffer.put(buf, 0, bytesRead);
-        }
-        incrementBytesRead(bytesRead);
-        long position = bytesRead >= 0 ? nextReadPos - 1 : nextReadPos;
-        endTime = System.currentTimeMillis();
-
-        if (fs.getMetricSwitch()) {
-            BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
-                BasicMetricsConsumer.MetricRecord.BYTEBUF, BasicMetricsConsumer.MetricRecord.READ, true,
-                endTime - startTime);
-            OBSCommonUtils.setMetricsInfo(fs, record);
-        }
-        LOG.debug("Read-ByteBuffer uri:{}, contentLength:{}, destLen:{}, readLen:{}, "
-                + "position:{}, thread:{}, timeUsedMilliSec:{}", uri, contentLength, len, bytesRead, position, threadId,
-            endTime - startTime);
-        return bytesRead;
     }
 
     private int tryToReadFromInputStream(final InputStream in, final byte[] buf, final int off, final int len)
@@ -635,13 +504,10 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead, By
         checkStreamOpen();
         long startTime = System.currentTimeMillis();
         long threadId = Thread.currentThread().getId();
-        long endTime;
-
         validatePositionedReadArgs(nextReadPos, buf, off, len);
         if (len == 0) {
             return 0;
         }
-
         boolean isTrue = this.contentLength == 0 || nextReadPos >= contentLength;
         if (isTrue) {
             return -1;
@@ -653,81 +519,45 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead, By
             onReadFailure(e, len);
             // the end of the file has moved
             return -1;
+        } catch (IOException e) {
+            OBSCommonUtils.setMetricsAbnormalInfo(fs, OBSOperateAction.readbytes,e);
+            throw e;
         }
 
-        int bytesRead = 0;
-        IOException exception = null;
-        int retryTime = 0;
-        long delayMs;
-        long startRetryTime = System.currentTimeMillis();
-        do {
-            try {
-                bytesRead = tryToReadFromInputStream(wrappedStream, buf, off, len);
-                if (bytesRead == -1) {
-                    return -1;
-                }
-                exception = null;
-                break;
-            } catch (EOFException e) {
-                onReadFailure(e, len);
-                return -1;
-            } catch (IOException e) {
-                exception = e;
-                onReadFailure(e, len);
-                LOG.debug("read offset[{}] len[{}] of [{}] failed, retry time[{}], " + "due to exception[{}]", off, len,
-                    uri, retryTime, exception);
-                delayMs = OBSCommonUtils.getSleepTimeInMs(retryTime);
-                retryTime++;
-                if (System.currentTimeMillis() - startTime + delayMs
-                    < OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY) {
-                    try {
-                        sleepInLock(delayMs);
-                    } catch (InterruptedException ie) {
-                        LOG.error("read offset[{}] len[{}] of [{}] failed, " + "retry time[{}], due to exception[{}]",
-                            off, len, uri, retryTime, exception);
-                        throw exception;
+        try {
+            int bytesRead = OBSCommonUtils.getOBSInvoker().retryByMaxTime(OBSOperateAction.readbytes, key, () -> {
+                int count;
+                try {
+                    count = tryToReadFromInputStream(wrappedStream, buf, off, len);
+                    if (count == -1) {
+                        return -1;
                     }
+                } catch (EOFException e) {
+                    onReadFailure(e, len);
+                    return -1;
+                } catch (IOException e) {
+                    onReadFailure(e, len);
+                    throw e;
                 }
+                return count;
+            }, true);
+
+            if (bytesRead > 0) {
+                streamCurrentPos += bytesRead;
+                nextReadPos += bytesRead;
             }
-        } while (System.currentTimeMillis() - startRetryTime <= OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY);
+            incrementBytesRead(bytesRead);
 
-        long costTime;
+            long endTime = System.currentTimeMillis();
 
-        if (exception != null) {
-            endTime = System.currentTimeMillis();
-            if (fs.getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
-                    BasicMetricsConsumer.MetricRecord.SEQ, BasicMetricsConsumer.MetricRecord.READ, false,
+            long position = bytesRead >= 0 ? nextReadPos - 1 : nextReadPos;
+            LOG.debug("Read-3args uri:{}, contentLength:{}, destLen:{}, readLen:{}, "
+                            + "position:{}, thread:{}, timeUsedMilliSec:{}", uri, contentLength, len, bytesRead, position, threadId,
                     endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(fs, record);
-            }
-            LOG.error("read offset[{}] len[{}] of [{}] failed, retry time[{}], " + "due to exception[{}]", off, len,
-                uri, retryTime, exception);
-            throw exception;
-        }
-
-        if (bytesRead > 0) {
-            streamCurrentPos += bytesRead;
-            nextReadPos += bytesRead;
-        }
-        incrementBytesRead(bytesRead);
-
-        endTime = System.currentTimeMillis();
-        costTime = endTime - startTime;
-        readMetric(costTime);
-
-        long position = bytesRead >= 0 ? nextReadPos - 1 : nextReadPos;
-        LOG.debug("Read-3args uri:{}, contentLength:{}, destLen:{}, readLen:{}, "
-                + "position:{}, thread:{}, timeUsedMilliSec:{}", uri, contentLength, len, bytesRead, position, threadId,
-            endTime - startTime);
-        return bytesRead;
-    }
-
-    private void readMetric(long costTime) {
-        if (fs.getMetricSwitch()) {
-            BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
-                BasicMetricsConsumer.MetricRecord.SEQ, BasicMetricsConsumer.MetricRecord.READ, true, costTime);
-            OBSCommonUtils.setMetricsInfo(fs, record);
+            return bytesRead;
+        } catch (IOException e) {
+            OBSCommonUtils.setMetricsAbnormalInfo(fs, OBSOperateAction.readbytes,e);
+            throw e;
         }
     }
 
@@ -753,7 +583,6 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead, By
      */
     @Override
     public synchronized void close() throws IOException {
-        long startTime = System.currentTimeMillis();
         if (!closed) {
             fs.checkOpen();
             // close or abort the stream
@@ -761,14 +590,6 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead, By
             // this is actually a no-op
             super.close();
             closed = true;
-        }
-
-        long endTime = System.currentTimeMillis();
-        if (fs.getMetricSwitch()) {
-            BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
-                BasicMetricsConsumer.MetricRecord.INPUT, BasicMetricsConsumer.MetricRecord.CLOSE, true,
-                endTime - startTime);
-            OBSCommonUtils.setMetricsInfo(fs, record);
         }
     }
 
@@ -783,7 +604,7 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead, By
      * @param length length of the stream
      * @throws IOException on any failure to close stream
      */
-    private synchronized void closeStream(final String reason, final long length) throws IOException {
+    protected synchronized void closeStream(final String reason, final long length) throws IOException {
         if (wrappedStream != null) {
             try {
                 wrappedStream.close();
@@ -804,7 +625,7 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead, By
         fs.checkOpen();
         checkStreamOpen();
 
-        long remaining = remainingInFile();
+        long remaining = remainingInStream();
         if (remaining > Integer.MAX_VALUE) {
             return Integer.MAX_VALUE;
         }
@@ -818,7 +639,7 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead, By
      */
     @InterfaceAudience.Private
     @InterfaceStability.Unstable
-    private synchronized long remainingInFile() {
+    private synchronized long remainingInStream() {
         return this.contentLength - this.streamCurrentPos;
     }
 
@@ -869,40 +690,40 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead, By
     @Override
     public void readFully(final long position, final byte[] buffer, final int offset, final int length)
         throws IOException {
-        fs.checkOpen();
-        checkStreamOpen();
-        long startTime = System.currentTimeMillis();
-        long threadId = Thread.currentThread().getId();
+        try {
+            fs.checkOpen();
+            checkStreamOpen();
+            long startTime = System.currentTimeMillis();
+            long threadId = Thread.currentThread().getId();
 
-        validatePositionedReadArgs(position, buffer, offset, length);
-        if (length == 0) {
-            return;
-        }
-        int nread = 0;
-        synchronized (this) {
-            long oldPos = getPos();
-            try {
-                seek(position);
-                while (nread < length) {
-                    int nbytes = read(buffer, offset + nread, length - nread);
-                    if (nbytes < 0) {
-                        throw new EOFException(FSExceptionMessages.EOF_IN_READ_FULLY);
-                    }
-                    nread += nbytes;
-                }
-            } finally {
-                seekQuietly(oldPos);
+            validatePositionedReadArgs(position, buffer, offset, length);
+            if (length == 0) {
+                return;
             }
+            int bytesRead = 0;
+            synchronized (this) {
+                long oldPos = getPos();
+                try {
+                    seek(position);
+                    while (bytesRead < length) {
+                        int bRead = read(buffer, offset + bytesRead, length - bytesRead);
+                        if (bRead < 0) {
+                            throw new EOFException(FSExceptionMessages.EOF_IN_READ_FULLY);
+                        }
+                        bytesRead += bRead;
+                    }
+                } finally {
+                    seekQuietly(oldPos);
+                }
+            }
+            long endTime = System.currentTimeMillis();
+            LOG.debug("ReadFully uri:{}, contentLength:{}, destLen:{}, readLen:{}, "
+                            + "position:{}, thread:{}, timeUsedMilliSec:{}", uri, contentLength, length,
+                    bytesRead, position, threadId, endTime - startTime);
+        } catch (IOException e) {
+            OBSCommonUtils.setMetricsAbnormalInfo(fs, OBSOperateAction.readfully,e);
+            throw e;
         }
-        long endTime = System.currentTimeMillis();
-        if (fs.getMetricSwitch()) {
-            BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(null,
-                BasicMetricsConsumer.MetricRecord.READFULLY, true, endTime - startTime);
-            OBSCommonUtils.setMetricsInfo(fs, record);
-        }
-        LOG.debug("ReadFully uri:{}, contentLength:{}, destLen:{}, readLen:{}, "
-                + "position:{}, thread:{}, timeUsedMilliSec:{}", uri, contentLength, length, nread, position, threadId,
-            endTime - startTime);
     }
 
     /**
@@ -920,121 +741,59 @@ public class OBSInputStream extends FSInputStream implements CanSetReadahead, By
         fs.checkOpen();
         checkStreamOpen();
         int len = length;
-        long startTime = System.currentTimeMillis();
-        long endTime;
-
         int readSize;
 
-        validatePositionedReadArgs(position, buffer, offset, len);
-        if (position < 0 || position >= contentLength) {
-            return -1;
-        }
-        if ((position + len) > contentLength) {
-            len = (int) (contentLength - position);
-        }
-
-        if (fs.isReadTransformEnabled()) {
-            readSize = super.read(position, buffer, offset, len);
-            endTime = System.currentTimeMillis();
-            if (fs.getMetricSwitch()) {
-                BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
-                    BasicMetricsConsumer.MetricRecord.RANDOM, BasicMetricsConsumer.MetricRecord.READ, true,
-                    endTime - startTime);
-                OBSCommonUtils.setMetricsInfo(fs, record);
+        try {
+            validatePositionedReadArgs(position, buffer, offset, len);
+            if (position < 0 || position >= contentLength) {
+                return -1;
             }
+            if ((position + len) > contentLength) {
+                len = (int) (contentLength - position);
+            }
+
+            if (fs.isReadTransformEnabled()) {
+                readSize = super.read(position, buffer, offset, len);
+                return readSize;
+            }
+            readSize = randomReadWithNewInputStream(position, buffer, offset, len);
             return readSize;
+        } catch (IOException e) {
+            OBSCommonUtils.setMetricsAbnormalInfo(fs, OBSOperateAction.readrandom,e);
+            throw e;
         }
-        readSize = randomReadWithNewInputStream(position, buffer, offset, len);
-        endTime = System.currentTimeMillis();
-        if (fs.getMetricSwitch()) {
-            BasicMetricsConsumer.MetricRecord record = new BasicMetricsConsumer.MetricRecord(
-                BasicMetricsConsumer.MetricRecord.RANDOM, BasicMetricsConsumer.MetricRecord.READ, true,
-                endTime - startTime);
-            OBSCommonUtils.setMetricsInfo(fs, record);
-        }
-        return readSize;
     }
 
     private int randomReadWithNewInputStream(final long position, final byte[] buffer, final int offset,
         final int length) throws IOException {
         long startTime = System.currentTimeMillis();
         long threadId = Thread.currentThread().getId();
-        int bytesRead = 0;
-        InputStream inputStream = null;
-        IOException exception = null;
-        GetObjectRequest request = new GetObjectRequest(bucket, key);
-        request.setRangeStart(position);
-        request.setRangeEnd(position + length);
-        if (fs.getSse().isSseCEnable()) {
-            request.setSseCHeader(fs.getSse().getSseCHeader());
-        }
 
-        int retryTime = 0;
-        long delayMs;
-        long startRetryTime = System.currentTimeMillis();
-        do {
-            exception = null;
+        int bytesRead = OBSCommonUtils.getOBSInvoker().retryByMaxTime(OBSOperateAction.readrandom, key, () -> {
+            int count;
+            InputStream inputStream = null;
             try {
+                GetObjectRequest request = new GetObjectRequest(bucket, key);
+                request.setRangeStart(position);
+                request.setRangeEnd(position + length);
+                if (fs.getSse().isSseCEnable()) {
+                    request.setSseCHeader(fs.getSse().getSseCHeader());
+                }
                 inputStream = client.getObject(request).getObjectContent();
-            } catch (ObsException e) {
-                exception = OBSCommonUtils.translateException("Read at position " + position, uri, e);
-
-                LOG.debug(
-                    "read position[{}] destLen[{}] offset[{}] readLen[{}] " + "of [{}] failed, retry time[{}], due to "
-                        + "exception[{}]", position, length, offset, bytesRead, uri, retryTime, exception);
-
-                if (!(exception instanceof OBSIOException)) {
-                    throw exception;
-                }
-            }
-
-            if (exception == null) {
-                try {
-                    bytesRead = tryToReadFromInputStream(inputStream, buffer, offset, length);
-                    if (bytesRead == -1) {
-                        return -1;
-                    }
-
-                    exception = null;
-                    break;
-                } catch (EOFException e) {
-                    onReadFailure(e, length);
+                count = tryToReadFromInputStream(inputStream, buffer, offset, length);
+                if (count == -1) {
                     return -1;
-                } catch (IOException e) {
-                    exception = e;
-
-                    LOG.debug("read position[{}] destLen[{}] offset[{}] readLen[{}] "
-                            + "of [{}] failed, retry time[{}], due to " + "exception[{}]", position, length, offset,
-                        bytesRead, uri, retryTime, exception);
-                } finally {
-                    if (inputStream != null) {
-                        inputStream.close();
-                    }
+                }
+            } catch (EOFException e) {
+                return -1;
+            } finally {
+                if (inputStream != null) {
+                    inputStream.close();
                 }
             }
+            return count;
+        }, true);
 
-            delayMs = OBSCommonUtils.getSleepTimeInMs(retryTime);
-            retryTime++;
-            if (System.currentTimeMillis() - startTime + delayMs < OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY) {
-                try {
-                    Thread.sleep(delayMs);
-                } catch (InterruptedException ie) {
-                    LOG.error(
-                        "read position[{}] destLen[{}] offset[{}] " + "readLen[{}] of [{}] failed, retry time[{}], "
-                            + "due to exception[{}]", position, length, offset, bytesRead, uri, retryTime, exception);
-                    throw exception;
-                }
-            }
-        } while (System.currentTimeMillis() - startRetryTime <= OBSCommonUtils.MAX_TIME_IN_MILLISECONDS_TO_RETRY);
-
-        if (inputStream == null || exception != null) {
-            IOException e = new IOException(
-                "read failed of " + uri + ", inputStream is " + (inputStream == null ? "null" : "not null"), exception);
-            LOG.error(
-                "read position[{}] destLen[{}] offset[{}] len[{}] failed, " + "retry time[{}], due to exception[{}]",
-                position, length, offset, bytesRead, retryTime, exception);
-            throw e;
-        }
         long endTime = System.currentTimeMillis();
         LOG.debug("Read-4args uri:{}, contentLength:{}, destLen:{}, readLen:{}, "
                 + "position:{}, thread:{}, timeUsedMilliSec:{}", uri, contentLength, length, bytesRead, position, threadId,
