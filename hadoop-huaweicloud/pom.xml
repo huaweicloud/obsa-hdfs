@@ -33,7 +33,7 @@
     <hadoop.plat.version>3.1.1</hadoop.plat.version>
     <obsa.version>53.8</obsa.version>
     <shading.prefix>obs.shaded</shading.prefix>
-    <jackson.databind.version>2.13.4.1</jackson.databind.version>
+    <jackson.databind.version>2.13.4.2</jackson.databind.version>
   </properties>
 
   <profiles>
