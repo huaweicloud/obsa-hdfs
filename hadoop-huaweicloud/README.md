@@ -424,3 +424,156 @@ Version 2.8.3.19/2.7.2.19
 
 修复问题：
 1. 【功能】HBASE场景，未关闭JAVA SDK的连接，导致EOF异常；
+
+------
+
+Example: mvn clean install -Pdist -Dhadoop.plat.version=3.1.1 -Dhadoop.version=3.1.1 -Dmaven.test.skip=true
+
+Pdist: Shades the dependencies such as obs java sdk and okttp on which hadoop-obs depends for compilation, deployment, and installation.
+Dhadoop.version: defines the dependent Hadoop version. Currently, only hadoop-2.8.x and later versions are supported.
+Dhadoop.plat.version: defines the jar naming rule. The value must be the same as that of -Dhadoop.version.
+The JAR package name format is hadoop-huaweicloud-x.x.x-hw-y.jar. The first three characters x.x.x indicate the dependent Hadoop version. The last y indicates the hadoop-obs version, for example, hadoop-huaweicloud-3.1.1-hw-45.jar. 3.1.1 indicates the matching Hadoop version, and 45 indicates the hadoop-obs version.
+
+=========================================================================
+
+Version 3.1.1.53.8/2.8.3.53.8/2.7.2.53.8
+
+1. [Optimization] The SHA256 check configuration fs.obs.fast.upload.checksum.type is added to the data write process. The default value is none.
+2. [Feature] The hadoop distcp command can retain the file owner (u), owner group (g), and permission (p). This feature is enabled by configuring fs.obs.permissions.mode=disguise.
+
+=========================================================================
+
+Version 3.1.1.53.7/2.8.3.53.7/2.7.2.53.7
+
+1. [BUG] In the MemArtsCC scenario, the read statistics are magnified when the cache misses.
+2. [Optimization] The trashRoot directory path in the big data recycle bin is optimized to reduce the number of lifecycle rules to be configured. Use the configuration fs.obs.hdfs.trash.version=2. The default path prefix is fs.obs.hdfs.trash.prefix=/user/.Trash.
+
+=========================================================================
+
+Version 3.1.1.53.6.1/2.8.3.53.6.1/2.7.2.53.6.1
+[Optimization] The OBS SDK version is upgraded to 3.23.3.1, which supports link setup retry and resolves dependency conflicts when the system is full.
+
+=========================================================================
+
+Version 3.1.1.53.6/2.8.3.53.6/2.7.2.53.6
+[Optimization] The OBSA adapts to the MemArtsCC SDK interface.
+
+=========================================================================
+
+Version 3.1.1.53.5/2.8.3.53.5/2.7.2.53.5
+[Optimization] The missing exception information is added to the write and read fields.
+
+=========================================================================
+
+Version 3.1.1.53.4/2.8.3.53.4/2.7.2.53.4
+[Feature] The WithErrCode interface is used to detect faults on the customer side of MRS, DLI, and OBS.
+
+=========================================================================
+
+Version 3.1.1.53.3/2.8.3.53.3/2.7.2.53.3
+[BUG] Fix the bug that the traffic reporting interface is invoked after the MemArtsCCClient fails to be initialized.
+
+=========================================================================
+
+Version 3.1.1.53.1/2.8.3.53.1/2.7.2.53.1
+[Optimization] The switch for reporting the traffic volume of the memartscc is added.
+
+=========================================================================
+
+Version 3.1.1.53/2.8.3.53/2.7.2.53
+[Feature] The OBSA can collect statistics on the traffic reported by the memartscc.
+
+=========================================================================
+
+Version 3.1.1.52.2/2.8.3.52.2/2.7.2.52.2
+[Optimization] The memartscc skips the association between the Pyspark and Spark engine.
+
+=========================================================================
+
+Version 3.1.1.52.1/2.8.3.52.1/2.7.2.52.1
+[Optimization] The switch for skipping the pyspark function is added for the memartscc service.
+
+=========================================================================
+
+Version 3.1.1.52/2.8.3.52/2.7.2.52
+[Optimization] The disk cache flushing function is added when data is written to OBS.
+
+=========================================================================
+
+Version 3.1.1.51/2.8.3.51/2.7.2.51
+[Feature] The OBS select interface is supported. It cannot be put into commercial use in the trial phase.
+
+=========================================================================
+
+Version 3.1.1.50.9/2.8.3.50.9/2.7.2.50.9
+[Optimization] The MD5 check option is added to the data write process.
+
+=========================================================================
+
+Version 3.1.1.50.8.1/2.8.3.50.8.1/2.7.2.50.8.1
+[Optimization] The function of skipping pyspark for MemArtsCC is added.
+
+=========================================================================
+
+Version 3.1.1.50.8/2.8.3.50.8/2.7.2.50.8
+[Optimization] The buffer pool is added to the MemArtsCC Input Stream.
+
+=========================================================================
+
+Version 3.1.1.50.7/2.8.3.50.7/2.7.2.50.7
+[BUG] Occasionally EOFException Occurs in OBSA ReadFully
+
+=========================================================================
+
+Version 3.1.1.50.6/2.8.3.50.6/2.7.2.50.6
+[Feature] fs trash
+[Feature] The dependency on Apache common lang 2.6 is removed so that OBSA supports 3.3. 1.
+[Feature] The delegationToken mechanism is supported.
+[BUG] override getHomeDirectory and fix mkdirs and fix putobject/appendobject retry
+
+=========================================================================
+
+Version 3.1.1.50.3/2.8.3.50.3/2.7.2.50.3
+[Optimization] In the new metric monitoring dotting framework, all interfaces report monitoring dotting when traffic control errors occur.
+
+=========================================================================
+
+Version 3.1.1.50.2/2.8.3.50.2/2.7.2.50.2
+[Optimization] When OBSA getContentSummary is not supported by the server, the system does not retry and silently rolls back to V1.
+[Optimization] New metric monitoring dotting framework
+
+=========================================================================
+
+Version 3.1.1.50.1/2.8.3.50.1/2.7.2.50.1
+[Feature] Interconnection with MemArtsCC (memartscc_3.22.4.T1)
+[Optimization] The retry mechanism in the flow control state is independent.
+[Optimization] One extra byte is added in the range reading process.
+
+=========================================================================
+
+Version 3.1.1.50/2.8.3.50/2.7.2.50
+[Feature] Interconnection with MemArtsCC (memartscc_3.22.3.B001)
+[Feature] The getContentSummary performance is improved.
+[Optimization] The OBS SDK is upgraded to 3.22.3.1 to improve the getContentSummary performance.
+[Optimization] Reduce the number of metadata access times.
+[Optimization] Code trustworthiness rectification
+[Optimization] The detailed flow control status code is displayed when the 503 flow control occurs.
+[Optimization] The default value FileSystem.getTrashRoot() + FastDelete is added for the fs.obs.trash.dir parameter.
+[Optimization] No retry is performed when status code 400 is received.
+[Optimization] Detailed error codes are added to exception logs to quickly locate faults.
+[Optimization] The behavior of the maven-shade-plugin plug-in is changed to prevent the integrator from repeatedly referencing the obs java SDK.
+[BUG] EOFException is thrown when the seek exceeds the end of the file.
+
+=========================================================================
+
+Version 3.1.1.46.1/2.8.3.46.1/2.7.2.46.1
+[Optimization] When inputStream seek exceeds the end of the file, EOFException is thrown.
+
+=========================================================================
+
+Version 3.1.1.46/2.8.3.46/2.7.2.46
+[BUG] In the object bucket scenario, the rename operation is still successful even if the server continuously returns 503.
+[Optimization] In scenarios such as Flink and Flume, the append interface is frequently invoked. This interface incorrectly determines the position of the output stream. As a result, many unnecessary warn-level logs are generated.
+[Optimization] The TCP connection setup timeout for hadoop-obs to access OBS is changed from 120s to 5s.
+[Optimization] The INFO-level log for obtaining the AK/SK is added.
+[Optimization] The OBS SDK is upgraded to 3.21.8.2.
