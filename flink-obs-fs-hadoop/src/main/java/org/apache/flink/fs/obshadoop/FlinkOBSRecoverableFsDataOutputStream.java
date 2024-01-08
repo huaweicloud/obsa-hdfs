@@ -26,7 +26,7 @@ import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.obs.AlreadyBeingCreatedException;
+import org.apache.hadoop.fs.obs.OBSAlreadyBeingCreatedException;
 import org.apache.hadoop.fs.obs.OBSFileSystem;
 
 import java.io.FileNotFoundException;
@@ -204,7 +204,7 @@ public class FlinkOBSRecoverableFsDataOutputStream extends RecoverableFsDataOutp
         while (true) {
             try {
                 fileSystem.truncate(path, recoverable.offset());
-            } catch (AlreadyBeingCreatedException e) {
+            } catch (OBSAlreadyBeingCreatedException e) {
                 try {
                     Thread.sleep(500L);
                 } catch (InterruptedException ex) {
