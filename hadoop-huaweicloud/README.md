@@ -8,8 +8,8 @@ jar包命名规范：hadoop-huaweicloud-x.x.x-hw-y.jar包含义：前三位x.x.x
 
 Version 3.1.1.54.0/2.8.3.54.0
 
-【优化】支持append场景去除head行为，提升append的性能表现
-【注】该版本性能优化特性需要手动配置core-site.xml的配置项，新增如下配置
+1. 【优化】支持append场景去除head行为，提升append的性能表现
+2. 【注】该版本性能优化特性需要手动配置core-site.xml的配置项，新增如下配置
 ```txt
 <property>
 <name>fs.obs.appendRemoveHead</name>
