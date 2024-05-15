@@ -4,7 +4,19 @@ Pdist：将hadoop-obs依赖的obs java sdk以及okttp等依赖进行了shade，�
 Dhadoop.version：定义了依赖的hadoop版本，目前仅支持依赖hadoop-2.8.x及以上版本
 Dhadoop.plat.version：定义了jar的命名规范，和-Dhadoop.version保持一致即可
 jar包命名规范：hadoop-huaweicloud-x.x.x-hw-y.jar包含义：前三位x.x.x为依赖的hadoop版本；最后一位y为hadoop-obs版本，例如：hadoop-huaweicloud-3.1.1-hw-45.jar，3.1.1是配套的hadoop版本，45是hadoop-obs的版本
+=========================================================================
 
+Version 3.1.1.54.0/2.8.3.54.0
+
+【优化】支持append场景去除head行为，提升append的性能表现
+【注】该版本性能优化特性需要手动配置core-site.xml的配置项，新增如下配置
+```txt
+<property>
+<name>fs.obs.appendRemoveHead</name>
+<value>true</value>
+</property>
+<property>
+```
 =========================================================================
 
 Version 3.1.1.53.8/2.8.3.53.8
