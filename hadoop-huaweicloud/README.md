@@ -5,6 +5,18 @@ Dhadoop.version：定义了依赖的hadoop版本，目前仅支持依赖hadoop-2
 Dhadoop.plat.version：定义了jar的命名规范，和-Dhadoop.version保持一致即可
 jar包命名规范：hadoop-huaweicloud-x.x.x-hw-y.jar包含义：前三位x.x.x为依赖的hadoop版本；最后一位y为hadoop-obs版本，例如：hadoop-huaweicloud-3.1.1-hw-45.jar，3.1.1是配套的hadoop版本，45是hadoop-obs的版本
 =========================================================================
+Version 3.1.1.54.4
+ 
+【优化】快速删除场景，即使是空文件夹，也会移动到快速删除目录
+【特性】支持关闭truncate接口，在core-site.xml内添加
+```txt
+<property>
+<name>fs.obs.suppose.truncate</name>
+<value>false</value>
+</property>
+```
+ 
+=========================================================================
 Version 3.1.1.54.3
  
 【优化】修复53.8版本引入的创建文件夹后获取权限为rw-rw-rw-问题，恢复默认的为rwxrwxrwx
@@ -26,7 +38,6 @@ Version 3.1.1.54.0/2.8.3.54.0
 <name>fs.obs.appendRemoveHead</name>
 <value>true</value>
 </property>
-<property>
 ```
 =========================================================================
 
