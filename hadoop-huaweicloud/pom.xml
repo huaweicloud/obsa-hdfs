@@ -28,7 +28,7 @@
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <file.encoding>UTF-8</file.encoding>
-    <hadoop.version>3.1.1-hw-ei-315005</hadoop.version>
+    <hadoop.version>3.2.4</hadoop.version>
     <esdk.version>3.23.3.1</esdk.version>
     <hadoop.plat.version>3.1.1</hadoop.plat.version>
     <obsa.version>53.8</obsa.version>
