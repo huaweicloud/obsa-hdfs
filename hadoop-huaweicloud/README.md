@@ -5,17 +5,18 @@ Dhadoop.version：定义了依赖的hadoop版本，目前仅支持依赖hadoop-2
 Dhadoop.plat.version：定义了jar的命名规范，和-Dhadoop.version保持一致即可
 jar包命名规范：hadoop-huaweicloud-x.x.x-hw-y.jar包含义：前三位x.x.x为依赖的hadoop版本；最后一位y为hadoop-obs版本，例如：hadoop-huaweicloud-3.1.1-hw-45.jar，3.1.1是配套的hadoop版本，45是hadoop-obs的版本
 =========================================================================
-Version 3.1.1.54.4
- 
-【优化】快速删除场景，即使是空文件夹，也会移动到快速删除目录
-【特性】支持关闭truncate接口，在core-site.xml内添加
-```txt
-<property>
-<name>fs.obs.suppose.truncate</name>
-<value>false</value>
-</property>
+Version 3.1.1.54.5
 ```
- 
+【特性】支持各个接口的耗时、操作类型、userName、endpoint等请求信息
+【特性】支持setAttr、getAttr等与accesslabel属性配合使用文件目录属性设置和获取，
+使用方式：
+    fs.setXAttr(filePath, "AccessLabel", setValue);// 设置filePath目录的AccessLabel属性值
+    fs.getXAttr(filePath, "AccessLabel");// 获取filePath目录的AccessLabel属性值
+注意：setXAttr和getXAttr仅支持设置/获取AccessLabel属性值，其他属性值的设置和获取不支持
+【优化】升级SDK版本至3.24.12，将SDK的使用版本从esdk-obs-java-optimise升级至esdk-obs-java-bundle
+【优化】多段上传的大小最小由5M下放到1M，即现在支持多段的最小段大小为1M
+【BUG】上传对象的缓存文件命名增加时间戳，修复缓存文件被覆盖数据不一致问题
+```
 =========================================================================
 
 Version 3.1.1.54.3
