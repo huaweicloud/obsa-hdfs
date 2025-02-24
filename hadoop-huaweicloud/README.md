@@ -8,6 +8,7 @@ jar包命名规范：hadoop-huaweicloud-x.x.x-hw-y.jar包含义：前三位x.x.x
 Version 3.1.1.54.5
 ```
 【特性】支持各个接口的耗时、操作类型、userName、endpoint等请求信息
+【特性】支持getFileChecksum，即CRC32校验
 【特性】支持setAttr、getAttr等与accesslabel属性配合使用文件目录属性设置和获取，
 使用方式：
     fs.setXAttr(filePath, "AccessLabel", setValue);// 设置filePath目录的AccessLabel属性值
