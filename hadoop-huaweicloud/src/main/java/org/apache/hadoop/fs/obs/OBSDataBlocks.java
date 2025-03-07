@@ -678,7 +678,12 @@ final class OBSDataBlocks {
             Path path = directoryAllocator.getLocalPathForWrite(pathStr, size, conf);
             File dir = new File(path.getParent().toUri().getPath());
             String prefix = path.getName();
-            return File.createTempFile(prefix, null, dir);
+
+            // 获取当前时间戳
+            long timestamp = System.currentTimeMillis();
+            String timestampString = String.valueOf(timestamp);
+            
+            return File.createTempFile(prefix, timestampString, dir);
         }
     }
 

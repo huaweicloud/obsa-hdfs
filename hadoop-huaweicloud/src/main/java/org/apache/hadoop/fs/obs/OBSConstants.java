@@ -35,7 +35,7 @@ public final class OBSConstants {
     /**
      * Minimum multipart size which OBS supports.
      */
-    public static final int MULTIPART_MIN_SIZE = 5 * 1024 * 1024;
+    public static final int MULTIPART_MIN_SIZE = 1024 * 1024;
 
     /**
      * OBS access key.
