@@ -19,10 +19,14 @@
 package org.apache.hadoop.fs.obs;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.Maps;
 import com.google.common.util.concurrent.ListeningExecutorService;
 import com.obs.services.ObsClient;
 import com.obs.services.exception.ObsException;
 import com.obs.services.model.AccessControlList;
+import com.obs.services.model.fs.accesslabel.GetAccessLabelRequest;
+import com.obs.services.model.fs.accesslabel.GetAccessLabelResult;
+import com.obs.services.model.fs.accesslabel.SetAccessLabelRequest;
 import com.obs.services.model.select.CsvInput;
 import com.obs.services.model.select.CsvOutput;
 import com.obs.services.model.select.ExpressionType;
@@ -41,21 +45,8 @@ import org.apache.hadoop.HadoopIllegalArgumentException;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.BlockLocation;
-import org.apache.hadoop.fs.ContentSummary;
-import org.apache.hadoop.fs.CreateFlag;
-import org.apache.hadoop.fs.FSDataInputStream;
-import org.apache.hadoop.fs.FSDataOutputStream;
-import org.apache.hadoop.fs.FSInputStream;
-import org.apache.hadoop.fs.FileAlreadyExistsException;
-import org.apache.hadoop.fs.FileStatus;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.LocatedFileStatus;
+import org.apache.hadoop.fs.*;
 import org.apache.hadoop.fs.Options.ChecksumOpt;
-import org.apache.hadoop.fs.ParentNotDirectoryException;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.PathFilter;
-import org.apache.hadoop.fs.RemoteIterator;
 import org.apache.hadoop.fs.obs.input.OBSInputStream;
 import org.apache.hadoop.fs.obs.input.InputPolicyFactory;
 import org.apache.hadoop.fs.obs.input.InputPolicys;
@@ -63,15 +54,15 @@ import org.apache.hadoop.fs.obs.input.ObsSelectInputStream;
 import org.apache.hadoop.fs.obs.memartscc.CcGetShardParam;
 import org.apache.hadoop.fs.obs.memartscc.MemArtsCCClient;
 import org.apache.hadoop.fs.obs.memartscc.ObjectShard;
-import org.apache.hadoop.fs.obs.security.AccessType;
-import org.apache.hadoop.fs.obs.security.AuthorizeProvider;
-import org.apache.hadoop.fs.obs.security.OBSAuthorizationException;
-import org.apache.hadoop.fs.obs.security.ObsDelegationTokenManger;
+import org.apache.hadoop.fs.obs.security.*;
 import org.apache.hadoop.fs.permission.FsPermission;
+import org.apache.hadoop.ipc.CallerContext;
+import org.apache.hadoop.ipc.Server;
 import org.apache.hadoop.security.AccessControlException;
 import org.apache.hadoop.security.Credentials;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.token.Token;
+import org.apache.hadoop.util.DataChecksum;
 import org.apache.hadoop.util.Progressable;
 import org.apache.hadoop.util.ReflectionUtils;
 import org.slf4j.Logger;
@@ -83,18 +74,14 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.net.InetAddress;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Date;
-import java.util.EnumSet;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+
+import static com.obs.services.internal.Constants.CommonHeaders.HASH_CRC32C;
 
 /**
  * The core OBS Filesystem implementation.
@@ -331,6 +318,12 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
 
     private TrafficStatistics trafficStatistics;
 
+    private OBSAuditLogger obsAuditLogger;
+
+    private String endpoint;
+
+    private String userName;
+
     /**
      * obs file system permissions mode.
      */
@@ -349,6 +342,7 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
                     break;
                 }
                 objectKey = filesBeingWritten.keySet().iterator().next();
+
                 outputStream = filesBeingWritten.remove(objectKey);
             }
             if (outputStream != null) {
@@ -420,6 +414,9 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
         super.initialize(name, conf);
         setConf(conf);
         try {
+            obsAuditLogger = new OBSAuditLogger();
+            userName = getUsernameOrigin();
+            endpoint = conf.get("fs.obs.endpoint");
             if (conf.getBoolean(OBSConstants.VERIFY_BUFFER_DIR_ACCESSIBLE_ENABLE, false)) {
                 OBSCommonUtils.verifyBufferDirAccessible(conf);
             }
@@ -922,6 +919,8 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
     @Override
     public FSDataInputStream open(final Path f, final int bufferSize) throws IOException {
         checkOpen();
+        long timeBeginStamp =System.currentTimeMillis();
+
         LOG.debug("Opening '{}' for reading.", f);
         final OBSFileStatus fileStatus;
         try {
@@ -936,6 +935,11 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
         checkPermission(f, AccessType.READ);
         FSInputStream fsInputStream = inputPolicyFactory.create(this, bucket, OBSCommonUtils.pathToKey(this, f),
             fileStatus.getLen(), statistics, boundedMultipartUploadThreadPool, fileStatus);
+
+        CallerContext ctx = CallerContext.getCurrent();
+        long timespan = System.currentTimeMillis() - timeBeginStamp;
+        obsAuditLogger.logAuditEvent(true, timespan, "open", OBSCommonUtils.pathToKey(this, f), null, null, (ctx==null?null:ctx.getContext()), userName, endpoint);
+
         return new FSDataInputStream(fsInputStream);
     }
 
@@ -1085,6 +1089,8 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
         final int bufferSize, final short replication, final long blkSize, final Progressable progress)
         throws IOException {
         checkOpen();
+        long timeBeginStamp =System.currentTimeMillis();
+
         String key = OBSCommonUtils.pathToKey(this, f);
         final FileStatus status;
         boolean exist = true;
@@ -1127,6 +1133,10 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
         synchronized (filesBeingWritten) {
             filesBeingWritten.put(key, outputStream);
         }
+
+        CallerContext ctx = CallerContext.getCurrent();
+        long timespan = System.currentTimeMillis() - timeBeginStamp;
+        obsAuditLogger.logAuditEvent(true, timespan, "create", key, null, null, (ctx==null?null:ctx.getContext()), userName, endpoint);
 
         return outputStream;
     }
@@ -1178,6 +1188,8 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
         final int bufferSize, final short replication, final long blkSize, final Progressable progress,
         final ChecksumOpt checksumOpt) throws IOException {
         checkOpen();
+        long timeBeginStamp =System.currentTimeMillis();
+
         LOG.debug("create: Creating new file {}, flags:{}, isFsBucket:{}", f, flags, isFsBucket());
         OBSCommonUtils.checkCreateFlag(flags);
         FSDataOutputStream outputStream;
@@ -1220,12 +1232,16 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
             synchronized (filesBeingWritten) {
                 filesBeingWritten.put(key, outputStream);
             }
-            return outputStream;
         } else {
             outputStream = create(f, permission, flags == null || flags.contains(CreateFlag.OVERWRITE), bufferSize,
                 replication, blkSize, progress);
-            return outputStream;
         }
+
+        CallerContext ctx = CallerContext.getCurrent();
+        long timespan = System.currentTimeMillis() - timeBeginStamp;
+        obsAuditLogger.logAuditEvent(true, timespan, "create", OBSCommonUtils.pathToKey(this, f), null, null, (ctx==null?null:ctx.getContext()), userName, endpoint);
+
+        return outputStream;
     }
 
     /**
@@ -1247,10 +1263,16 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
         final EnumSet<CreateFlag> flags, final int bufferSize, final short replication, final long blkSize,
         final Progressable progress) throws IOException {
         checkOpen();
+        long timeBeginStamp =System.currentTimeMillis();
+
         OBSCommonUtils.checkCreateFlag(flags);
         if (path.getParent() != null && !this.exists(path.getParent())) {
             throw new FileNotFoundException(path.toString() + " parent directory not exist.");
         }
+
+        CallerContext ctx = CallerContext.getCurrent();
+        long timespan = System.currentTimeMillis() - timeBeginStamp;
+        obsAuditLogger.logAuditEvent(true, timespan, "createNonRecursive", OBSCommonUtils.pathToKey(this, path), null, null, (ctx==null?null:ctx.getContext()), userName, endpoint);
 
         return create(path, permission, flags.contains(CreateFlag.OVERWRITE),
             bufferSize, replication, blkSize, progress);
@@ -1268,6 +1290,8 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
     public FSDataOutputStream append(final Path f, final int bufferSize, final Progressable progress)
         throws IOException {
         checkOpen();
+        long timeBeginStamp =System.currentTimeMillis();
+
         if (!isFsBucket()) {
             throw new UnsupportedOperationException("non-posix bucket. Append is not supported " + "by OBSFileSystem");
         }
@@ -1302,12 +1326,19 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
         synchronized (filesBeingWritten) {
             filesBeingWritten.put(key, outputStream);
         }
+
+        CallerContext ctx = CallerContext.getCurrent();
+        long timespan = System.currentTimeMillis() - timeBeginStamp;
+        obsAuditLogger.logAuditEvent(true, timespan, "append", key, null, null, (ctx==null?null:ctx.getContext()), userName, endpoint);
+
         return outputStream;
     }
 
     @Override
     public boolean truncate(Path f, long newLength) throws IOException {
         checkOpen();
+        long timeBeginStamp =System.currentTimeMillis();
+
         if (!enablePosix) {
             super.truncate(f, newLength);
         }
@@ -1348,6 +1379,10 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
         checkPermission(f, AccessType.WRITE);
         OBSPosixBucketUtils.innerFsTruncateWithRetry(this, f, newLength);
 
+        CallerContext ctx = CallerContext.getCurrent();
+        long timespan = System.currentTimeMillis() - timeBeginStamp;
+        obsAuditLogger.logAuditEvent(true, timespan, "truncate", key, null, null, (ctx==null?null:ctx.getContext()), userName, endpoint);
+
         return true;
     }
 
@@ -1361,6 +1396,8 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
     @Override
     public boolean exists(final Path f) throws IOException {
         checkOpen();
+        long timeBeginStamp =System.currentTimeMillis();
+
         try {
             return getFileStatus(f) != null;
         } catch (FileNotFoundException e) {
@@ -1379,24 +1416,32 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
     @Override
     public boolean rename(final Path src, final Path dst) throws IOException {
         checkOpen();
+        long timeBeginStamp =System.currentTimeMillis();
+
         long startTime = System.currentTimeMillis();
         long threadId = Thread.currentThread().getId();
         long endTime;
         LOG.debug("Rename path {} to {} start", src, dst);
         try {
+            boolean success;
             if (enablePosix) {
                 checkPermission(src, AccessType.WRITE);
                 checkPermission(dst,AccessType.WRITE);
-                boolean success = OBSPosixBucketUtils.renameBasedOnPosix(this, src, dst);
+                success = OBSPosixBucketUtils.renameBasedOnPosix(this, src, dst);
                 OBSCommonUtils.setMetricsNormalInfo(this, OBSOperateAction.rename, startTime);
-                return success;
             } else {
                 checkPermission(src, AccessType.WRITE);
                 checkPermission(dst, AccessType.WRITE);
-                boolean success = OBSObjectBucketUtils.renameBasedOnObject(this, src, dst);
+                success = OBSObjectBucketUtils.renameBasedOnObject(this, src, dst);
                 OBSCommonUtils.setMetricsNormalInfo(this, OBSOperateAction.rename, startTime);
-                return success;
             }
+
+            CallerContext ctx = CallerContext.getCurrent();
+        long timespan = System.currentTimeMillis() - timeBeginStamp;
+            obsAuditLogger.logAuditEvent(true, timespan, "truncate", OBSCommonUtils.pathToKey(this, src), OBSCommonUtils.pathToKey(this, dst), null, (ctx==null?null:ctx.getContext()), userName, endpoint);
+
+            return success;
+
         } catch (ObsException e) {
             OBSCommonUtils.setMetricsAbnormalInfo(this, OBSOperateAction.rename, e);
             throw OBSCommonUtils.translateException("rename(" + src + ", " + dst + ")", src, e);
@@ -1538,6 +1583,8 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
     @Override
     public boolean delete(final Path f, final boolean recursive) throws IOException {
         checkOpen();
+        long timeBeginStamp =System.currentTimeMillis();
+
         long startTime = System.currentTimeMillis();
         try {
             FileStatus status = OBSCommonUtils.getFileStatusWithRetry(this, f);
@@ -1550,6 +1597,11 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
                 return success;
             }
             checkPermission(f,AccessType.WRITE);
+
+            CallerContext ctx = CallerContext.getCurrent();
+        long timespan = System.currentTimeMillis() - timeBeginStamp;
+            obsAuditLogger.logAuditEvent(true, timespan, "delete", OBSCommonUtils.pathToKey(this, f), null, null, (ctx==null?null:ctx.getContext()), userName, endpoint);
+
             return OBSObjectBucketUtils.objectDelete(this, status, recursive);
         } catch (FileNotFoundException e) {
             LOG.warn("Couldn't delete {} - does not exist", f);
@@ -1603,6 +1655,8 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
     @Override
     public FileStatus[] listStatus(final Path f) throws FileNotFoundException, IOException {
         checkOpen();
+        long timeBeginStamp =System.currentTimeMillis();
+
         checkPermission(f,AccessType.READ);
         long startTime = System.currentTimeMillis();
         long threadId = Thread.currentThread().getId();
@@ -1611,6 +1665,11 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
             FileStatus[] statuses = OBSCommonUtils.listStatus(this, f, false);
             endTime = System.currentTimeMillis();
             LOG.debug("List status for path:{}, thread:{}, timeUsedInMilliSec:{}", f, threadId, endTime - startTime);
+
+            CallerContext ctx = CallerContext.getCurrent();
+        long timespan = System.currentTimeMillis() - timeBeginStamp;
+            obsAuditLogger.logAuditEvent(true, timespan, "listStatus", OBSCommonUtils.pathToKey(this, f), null, null, (ctx==null?null:ctx.getContext()), userName, endpoint);
+
             return statuses;
         } catch (ObsException e) {
             throw OBSCommonUtils.translateException("listStatus", f, e);
@@ -1633,6 +1692,17 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
         return user;
     }
 
+    static String getUsernameOrigin() {
+        String user;
+        try {
+            user = UserGroupInformation.getCurrentUser().toString();
+        } catch(IOException ex) {
+            LOG.error("get user fail,fallback to system property user.name", ex);
+            user = System.getProperty("user.name");
+        }
+        return user;
+    }
+
     /**
      * This public interface is provided specially for Huawei MRS. List the
      * statuses of the files/directories in the given path if the path is a
@@ -1647,6 +1717,8 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
      */
     public FileStatus[] listStatus(final Path f, final boolean recursive) throws FileNotFoundException, IOException {
         checkOpen();
+        long timeBeginStamp =System.currentTimeMillis();
+
         checkPermission(f,AccessType.READ);
         long startTime = System.currentTimeMillis();
         long threadId = Thread.currentThread().getId();
@@ -1655,8 +1727,18 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
             FileStatus[] statuses = OBSCommonUtils.listStatus(this, f, recursive);
             endTime = System.currentTimeMillis();
             LOG.debug("List status for path:{}, thread:{}, timeUsedInMilliSec:{}", f, threadId, endTime - startTime);
+
+            CallerContext ctx = CallerContext.getCurrent();
+        long timespan = System.currentTimeMillis() - timeBeginStamp;
+            obsAuditLogger.logAuditEvent(true, timespan, "listStatus", OBSCommonUtils.pathToKey(this, f), null, null, (ctx==null?null:ctx.getContext()), userName, endpoint);
+
             return statuses;
         } catch (ObsException e) {
+
+            CallerContext ctx = CallerContext.getCurrent();
+        long timespan = System.currentTimeMillis() - timeBeginStamp;
+            obsAuditLogger.logAuditEvent(false, timespan, "listStatus", OBSCommonUtils.pathToKey(this, f), null, null, (ctx==null?null:ctx.getContext()), userName, endpoint);
+
             throw OBSCommonUtils.translateException(
                 "listStatus with recursive flag[" + (recursive ? "true] " : "false] "), f, e);
         }
@@ -1720,9 +1802,17 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
     public boolean mkdirs(final Path path, final FsPermission permission)
         throws IOException, FileAlreadyExistsException {
         checkOpen();
+        long timeBeginStamp =System.currentTimeMillis();
+
         checkPermission(path,AccessType.WRITE);
         try {
-            return OBSCommonUtils.mkdirs(this, path);
+            boolean success = OBSCommonUtils.mkdirs(this, path);
+
+            CallerContext ctx = CallerContext.getCurrent();
+        long timespan = System.currentTimeMillis() - timeBeginStamp;
+            obsAuditLogger.logAuditEvent(success, timespan, "mkdirs", OBSCommonUtils.pathToKey(this, path), null, null, (ctx==null?null:ctx.getContext()), userName, endpoint);
+
+            return success;
         } catch (ObsException e) {
             throw OBSCommonUtils.translateException("mkdirs", path, e);
         }
@@ -1796,10 +1886,17 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
     @Override
     public FileStatus getFileStatus(final Path f) throws FileNotFoundException, IOException {
         checkOpen();
+        long timeBeginStamp =System.currentTimeMillis();
+
         long startTime = System.currentTimeMillis();
         try {
             FileStatus fileStatus = OBSCommonUtils.getFileStatusWithRetry(this, f);
             OBSCommonUtils.setMetricsNormalInfo(this, OBSOperateAction.getFileStatus, startTime);
+
+            CallerContext ctx = CallerContext.getCurrent();
+        long timespan = System.currentTimeMillis() - timeBeginStamp;
+            obsAuditLogger.logAuditEvent(true, timespan, "getFileStatus", OBSCommonUtils.pathToKey(this, f), null, fileStatus, (ctx==null?null:ctx.getContext()), userName, endpoint);
+
             return fileStatus;
         } catch (OBSFileConflictException e) {
             FileNotFoundException fileNotFoundException = new FileNotFoundException(e.getMessage());
@@ -1836,9 +1933,17 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
     @Override
     public ContentSummary getContentSummary(final Path f) throws FileNotFoundException, IOException {
         checkOpen();
+        long timeBeginStamp =System.currentTimeMillis();
+
         ContentSummary contentSummary;
         if (!obsContentSummaryEnable) {
-            return super.getContentSummary(f);
+            ContentSummary resultSummary = super.getContentSummary(f);
+
+            CallerContext ctx = CallerContext.getCurrent();
+            long timespan = System.currentTimeMillis() - timeBeginStamp;
+            obsAuditLogger.logAuditEvent(true, timespan, "getContentSummary", OBSCommonUtils.pathToKey(this, f), null, null, (ctx==null?null:ctx.getContext()), userName, endpoint);
+
+            return resultSummary;
         }
 
         FileStatus status;
@@ -1856,6 +1961,11 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
                 .directoryCount(0)
                 .spaceConsumed(length)
                 .build();
+
+            CallerContext ctx = CallerContext.getCurrent();
+            long timespan = System.currentTimeMillis() - timeBeginStamp;
+            obsAuditLogger.logAuditEvent(true, timespan, "getContentSummary", OBSCommonUtils.pathToKey(this, f), null, status, (ctx==null?null:ctx.getContext()), userName, endpoint);
+
             return contentSummary;
         }
 
@@ -1883,16 +1993,25 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
                 }
 
                 if (!fallback) {
+
+                    CallerContext ctx = CallerContext.getCurrent();
+                    long timespan = System.currentTimeMillis() - timeBeginStamp;
+                    obsAuditLogger.logAuditEvent(true, timespan, "getContentSummary", OBSCommonUtils.pathToKey(this, f), null, status, (ctx==null?null:ctx.getContext()), userName, endpoint);
+
                     return contentSummary;
                 }
                 LOG.debug("fallback to getContentSummaryV1, path={}", f.toString());
             }
             contentSummary = OBSPosixBucketUtils.fsGetDirectoryContentSummary(this, OBSCommonUtils.pathToKey(this, f));
-            return contentSummary;
         } else {
             contentSummary = OBSObjectBucketUtils.getDirectoryContentSummary(this, OBSCommonUtils.pathToKey(this, f));
-            return contentSummary;
         }
+
+        CallerContext ctx = CallerContext.getCurrent();
+        long timespan = System.currentTimeMillis() - timeBeginStamp;
+        obsAuditLogger.logAuditEvent(true, timespan, "getContentSummary", OBSCommonUtils.pathToKey(this, f), null, status, (ctx==null?null:ctx.getContext()), userName, endpoint);
+        
+        return contentSummary;
     }
 
     /**
@@ -1911,8 +2030,15 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
     public void copyFromLocalFile(final boolean delSrc, final boolean overwrite, final Path src, final Path dst)
         throws FileAlreadyExistsException, IOException {
         checkOpen();
+        long timeBeginStamp =System.currentTimeMillis();
+
         try {
             super.copyFromLocalFile(delSrc, overwrite, src, dst);
+
+            CallerContext ctx = CallerContext.getCurrent();
+        long timespan = System.currentTimeMillis() - timeBeginStamp;
+            obsAuditLogger.logAuditEvent(true, timespan, "getFileStatus", OBSCommonUtils.pathToKey(this, src), OBSCommonUtils.pathToKey(this, dst), null, (ctx==null?null:ctx.getContext()), userName, endpoint);
+
         } catch (ObsException e) {
             throw OBSCommonUtils.translateException("copyFromLocalFile(" + src + ", " + dst + ")", src, e);
         }
@@ -1954,8 +2080,6 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
 
         LOG.info("Finish closing filesystem instance for uri: {}", uri);
     }
-
-
 
     @Override
     public String getCanonicalServiceName() {
@@ -2093,6 +2217,8 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
     public RemoteIterator<LocatedFileStatus> listFiles(final Path f, final boolean recursive)
         throws FileNotFoundException, IOException {
         checkOpen();
+        long timeBeginStamp =System.currentTimeMillis();
+
         checkPermission(f,AccessType.READ);
         RemoteIterator<LocatedFileStatus> locatedFileStatus;
         Path path = OBSCommonUtils.qualify(this, f);
@@ -2111,7 +2237,6 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
                     OBSCommonUtils.toLocatedFileStatus(this, fileStatus));
                 // simple case: File
                 LOG.debug("Path is a file");
-                return locatedFileStatus;
             } else {
                 LOG.debug("listFiles: doing listFiles of directory {} - recursive {}", path, recursive);
                 // directory: do a bulk operation
@@ -2122,8 +2247,13 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
                     obsListing.createFileStatusListingIterator(path,
                         OBSCommonUtils.createListObjectsRequest(this, key, delimiter),
                         org.apache.hadoop.fs.obs.OBSListing.ACCEPT_ALL, new OBSListing.AcceptFilesOnly(path)));
-                return locatedFileStatus;
             }
+
+            CallerContext ctx = CallerContext.getCurrent();
+        long timespan = System.currentTimeMillis() - timeBeginStamp;
+            obsAuditLogger.logAuditEvent(true, timespan, "listFiles", OBSCommonUtils.pathToKey(this, f), null, null, (ctx==null?null:ctx.getContext()), userName, endpoint);
+
+            return locatedFileStatus;
         } catch (ObsException e) {
             throw OBSCommonUtils.translateException("listFiles", path, e);
         }
@@ -2163,6 +2293,8 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
     public RemoteIterator<LocatedFileStatus> listLocatedStatus(final Path f, final PathFilter filter)
         throws FileNotFoundException, IOException {
         checkOpen();
+        long timeBeginStamp =System.currentTimeMillis();
+
         checkPermission(f,AccessType.READ);
         Path path = OBSCommonUtils.qualify(this, f);
         LOG.debug("listLocatedStatus({}, {}", path, filter);
@@ -2181,7 +2313,6 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
                 LOG.debug("Path is a file");
                 locatedFileStatusRemoteList = new OBSListing.SingleStatusRemoteIterator(
                     filter.accept(path) ? OBSCommonUtils.toLocatedFileStatus(this, fileStatus) : null);
-                return locatedFileStatusRemoteList;
             } else {
                 // directory: trigger a lookup
                 String key = OBSCommonUtils.maybeAddTrailingSlash(OBSCommonUtils.pathToKey(this, path));
@@ -2189,8 +2320,13 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
                     obsListing.createFileStatusListingIterator(path,
                         OBSCommonUtils.createListObjectsRequest(this, key, "/"), filter,
                         new OBSListing.AcceptAllButSelfAndOBSDirs(path)));
-                return locatedFileStatusRemoteList;
             }
+
+            CallerContext ctx = CallerContext.getCurrent();
+        long timespan = System.currentTimeMillis() - timeBeginStamp;
+            obsAuditLogger.logAuditEvent(true, timespan, "listLocatedStatus", OBSCommonUtils.pathToKey(this, f), null, fileStatus, (ctx==null?null:ctx.getContext()), userName, endpoint);
+
+            return locatedFileStatusRemoteList;
         } catch (ObsException e) {
             throw OBSCommonUtils.translateException("listLocatedStatus", path, e);
         }
@@ -2275,4 +2411,134 @@ public class OBSFileSystem extends FileSystem implements OpenFileWithJobConf {
             OBSPosixBucketUtils.fsSetOwner(this, f, username, groupname);
         }
     }
+
+    /**
+     * Set owner and group for given file.
+     * @param f the file to get FileChecksum
+     * @return an FileChecksum that bytesPercrc set -1, type set DataChecksum.Type.CRC32C
+     * @throws IOException If an I/O error occurred
+     */
+    @Override
+    public FileChecksum getFileChecksum(Path f) throws IOException {
+        checkOpen();
+        long timeBeginStamp =System.currentTimeMillis();
+
+        String key = OBSCommonUtils.pathToKey(this, f);
+        Object getCrcContext = OBSCommonUtils.getObjectMetadataheader(this, key).get(HASH_CRC32C);
+        if(getCrcContext == null){
+            LOG.error("Get file crc32 failed, getCrcContext is null");
+            return new CompositeCrcFileChecksum(-1, DataChecksum.Type.CRC32C, -1);
+        }
+        long unsignedInt = Long.parseLong(getCrcContext.toString()); // 将字符串转换为long类型
+        int signedInt = (int) (unsignedInt & 0xFFFFFFFFL); // 使用位运算将其截断为int类型
+
+        CallerContext ctx = CallerContext.getCurrent();
+        long timespan = System.currentTimeMillis() - timeBeginStamp;
+        obsAuditLogger.logAuditEvent(true, timespan, "getFileChecksum", OBSCommonUtils.pathToKey(this, f), null, null, (ctx==null?null:ctx.getContext()), userName, endpoint);
+
+        return new CompositeCrcFileChecksum(signedInt, DataChecksum.Type.CRC32C, -1);
+    }
+
+    @Override
+    public void setXAttr(Path path, String name, byte[] value) throws IOException {
+        this.setXAttr(path, name, value, EnumSet.of(XAttrSetFlag.CREATE, XAttrSetFlag.REPLACE));
+    }
+
+    /**
+     * XXX
+     * @param path the file to setXAttr
+     * @param name the attr should equal AccessLabel
+     * @param value the value of AccessLabel
+     * @param flag the value of XAttrSetFlag
+     * @throws IOException If an I/O error occurred
+     */
+    @Override
+    public void setXAttr(Path path, String name, byte[] value, EnumSet<XAttrSetFlag> flag) throws IOException {
+        //设置目录accesslabel
+        if (name.equals("AccessLabel")) {
+            try{
+                OBSFileStatus fileStatus = OBSCommonUtils.getFileStatusWithRetry(this, path);
+                SetAccessLabelRequest setAccessLabelRequest = new SetAccessLabelRequest();
+                setAccessLabelRequest.setBucketName(getBucket());
+                if (!fileStatus.isDirectory()) {
+                    throw new IOException(this.getClass().getSimpleName() + String.format("path is %s, which is not directory", path));
+                }
+                try{
+                    String[] accessLabels = new String(value, StandardCharsets.UTF_8).split(";");
+                    ArrayList<String> roleLabels = new ArrayList<>(Arrays.asList(accessLabels));
+                    setAccessLabelRequest.setRoleLabel(roleLabels);
+                } catch (Exception ex) {
+                    throw new IOException(this.getClass().getSimpleName() + "value is %s, which is not wrong format");
+                }
+
+                setAccessLabelRequest.setDir(OBSCommonUtils.pathToKey(this, path));
+                getObsClient().setAccessLabelFs(setAccessLabelRequest);
+                return;
+            }catch (ObsException e) {
+                throw OBSCommonUtils.translateException(
+                        String.format("setXAttr failed, value is %s", new String(value, StandardCharsets.UTF_8)), path, e);
+            }
+        }
+
+        throw new IOException(this.getClass().getSimpleName() + String.format("name is %s, which is not equal to AccessLabel", name));
+    }
+
+    @Override
+    public byte[] getXAttr(Path path, String name) throws IOException {
+        if (name.equals("AccessLabel")) {
+            try {
+                return getXAttrs(path).get("AccessLabel");
+            }catch (IOException e){
+                throw new IOException(this.getClass().getSimpleName() + String.format("path is %s, which is getXAttrs failed", path));
+            }
+        }
+        throw new UnsupportedOperationException(this.getClass().getSimpleName() + " doesn't support getXAttr");
+    }
+
+    @Override
+    public Map<String, byte[]> getXAttrs(Path path) throws IOException {
+        Map<String, byte[]> trgXAttrs = Maps.newHashMap();
+        OBSFileStatus fileStatus = OBSCommonUtils.getFileStatusWithRetry(this, path);
+        if (fileStatus.isFile()) {
+            throw new IOException(this.getClass().getSimpleName() + String.format("path is %s, which is not directory", path));
+        }
+
+        GetAccessLabelRequest getAccessLabelRequest = new GetAccessLabelRequest();
+        getAccessLabelRequest.setBucketName(this.getBucket());
+        String key = OBSCommonUtils.pathToKey(this, path);
+        if (key.isEmpty()) {
+            return trgXAttrs;
+        }
+
+        getAccessLabelRequest.setDir(key);
+        try{
+            GetAccessLabelResult accessLabelFs = getObsClient().getAccessLabelFs(getAccessLabelRequest);
+            List<String> roleLabels = accessLabelFs.getRoleLabel();
+            StringBuilder xattr= new StringBuilder();
+            for (String label:roleLabels) {
+                xattr.append(label).append(";");
+            }
+            trgXAttrs.put("AccessLabel", xattr.toString().getBytes(StandardCharsets.UTF_8));
+        } catch (ObsException e) {
+            throw OBSCommonUtils.translateException("getAccessLabel failed", path, e);
+        }
+        return trgXAttrs;
+    }
+
+    @Override
+    public Map<String, byte[]> getXAttrs(Path path, List<String> names) throws IOException {
+        throw new UnsupportedOperationException(this.getClass().getSimpleName() + " doesn't support getXAttrs");
+    }
+
+    @Override
+    public List<String> listXAttrs(Path path) throws IOException {
+        throw new UnsupportedOperationException(this.getClass().getSimpleName() + " doesn't support listXAttrs");
+    }
+
+    @Override
+    public void removeXAttr(Path path, String name) throws IOException {
+        throw new UnsupportedOperationException(this.getClass().getSimpleName() + " doesn't support removeXAttr");
+    }
+
+
 }

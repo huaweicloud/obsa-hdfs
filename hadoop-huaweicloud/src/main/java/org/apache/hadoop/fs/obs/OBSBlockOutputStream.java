@@ -151,6 +151,12 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
      */
     private boolean mockUploadPartError = false;
 
+    /**
+     * Flag for appending remove head.
+     */
+    private boolean appendRemoveHead = false;
+    private String appendRemoveHeadKey = "fs.obs.appendRemoveHead";
+
     private String hflushPolicy = OBSConstants.OUTPUT_STREAM_HFLUSH_POLICY_SYNC;
 
     /**
@@ -181,6 +187,7 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
         this.multiPartUpload = null;
         this.hflushPolicy = owner.getConf()
             .get(OBSConstants.OUTPUT_STREAM_HFLUSH_POLICY, OBSConstants.OUTPUT_STREAM_HFLUSH_POLICY_SYNC);
+        this.appendRemoveHead = owner.getConf().getBoolean(appendRemoveHeadKey, false);
         // create that first block. This guarantees that an open + close
         // sequence writes a 0-byte entry.
         createBlockIfNeeded();
@@ -394,6 +401,14 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
      * @throws IOException any problem in append or put object
      */
     private synchronized void putObjectIfNeedAppend() throws IOException {
+        if(appendRemoveHead){
+            if (appendAble.get()) {
+                appendFsFile();
+            } else {
+                putObject();
+            }
+            return;
+        }
         FileStatus fileStatus = null;
         boolean exists = true;
         if (appendAble.get()) {
@@ -440,6 +455,33 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
     }
 
     /**
+     * Append posix file without heading.
+     *
+     * @throws IOException any problem
+     */
+    private synchronized void appendFsFile() throws IOException {
+        LOG.debug("bucket is posix, to append file. key is {}", key);
+        final OBSDataBlocks.DataBlock block = getActiveBlock();
+        if (block == null) {
+            throw new IOException("block is null");
+        }
+        WriteFileRequest writeFileReq;
+        if (block instanceof OBSDataBlocks.DiskBlock) {
+            writeFileReq = OBSCommonUtils.newAppendFileRequest(fs, key, objectLen, (File) block.startUpload());
+        } else {
+            writeFileReq = OBSCommonUtils.newAppendFileRequest(fs, key, objectLen, (InputStream) block.startUpload());
+        }
+        try {
+            OBSCommonUtils.appendFile(fs, writeFileReq);
+            objectLen += block.dataSize();
+        }finally {
+            if (writeFileReq.getInput() != null) {
+                writeFileReq.getInput().close();
+            }
+        }
+    }
+
+    /**
      * Upload the current block as a single PUT request; if the buffer is empty
      * a 0-byte PUT will be invoked, as it is needed to create an entry at the
      * far end.
@@ -471,10 +513,7 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
             writeOperationHelper.putObject(putObjectRequest);
             objectLen += size;
         } finally {
-            if (putObjectRequest.getInput() != null) {
-                putObjectRequest.getInput().close();
-            }
-            OBSCommonUtils.closeAll(block);
+            OBSCommonUtils.closeAll(putObjectRequest.getInput(), block);
         }
     }
 
@@ -719,8 +758,7 @@ class OBSBlockOutputStream extends OutputStream implements Syncable {
                     hasException.set(true);
                     throw e;
                 } finally {
-                    request.getInput().close();
-                    OBSCommonUtils.closeAll(block);
+                    OBSCommonUtils.closeAll(request.getInput(), block);
                 }
                 return new Pair<PartEtag, Integer>(partETag, size);
             });

@@ -47,12 +47,13 @@ import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.client.HdfsDataOutputStream;
 import org.apache.hadoop.util.Progressable;
 
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.security.AccessController;
+import java.security.PrivilegedAction;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -449,7 +450,10 @@ public class OBSHDFSFileSystem extends DistributedFileSystem {
         try {
             Class<?> classType = newPath.getFS().getClass();
             Method method = classType.getDeclaredMethod("rename", Path.class, Path.class, Options.Rename[].class);
-            method.setAccessible(true);
+            AccessController.doPrivileged((PrivilegedAction<Object>) () -> {
+                method.setAccessible(true);
+                return null;
+            });
             method.invoke(newPath.getFS(), new Object[] {newPath.toPath(), newPathDest.toPath(), options});
             return;
         } catch (NoSuchMethodException e) {

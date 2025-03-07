@@ -1062,6 +1062,30 @@ public final class OBSCommonUtils {
     }
 
     /**
+     * Create a appendFile request without head. Adds the ACL and metadata
+     *
+     * @param owner          the owner OBSFileSystem instance
+     * @param key            key of object
+     * @param tmpFile        temp file or input stream
+     * @param recordPosition client record next append position
+     * @return the request
+     * @throws IOException any problem
+     */
+    static WriteFileRequest newAppendFileRequest(final OBSFileSystem owner, final String key, final long recordPosition,
+        final File tmpFile) throws IOException {
+        Preconditions.checkNotNull(key);
+        Preconditions.checkNotNull(tmpFile);
+
+
+        WriteFileRequest writeFileReq = new WriteFileRequest(owner.getBucket(), key);
+        writeFileReq.setInput(new FileInputStream(tmpFile));
+        writeFileReq.setPosition(recordPosition);
+        writeFileReq.setAutoClose(false);
+        writeFileReq.setAcl(owner.getCannedACL());
+        return writeFileReq;
+    }
+
+    /**
      * Create a appendFile request. Adds the ACL and metadata
      *
      * @param owner          the owner OBSFileSystem instance
@@ -1083,6 +1107,25 @@ public final class OBSCommonUtils {
                 appendPosition, fileStatus.getLen(), recordPosition);
         }
         WriteFileRequest writeFileReq = new WriteFileRequest(owner.getBucket(), key, inputStream, appendPosition);
+        writeFileReq.setAcl(owner.getCannedACL());
+        return writeFileReq;
+    }
+
+    /**
+     * Create a appendFile request without head. Adds the ACL and metadata
+     *
+     * @param owner          the owner OBSFileSystem instance
+     * @param key            key of object
+     * @param inputStream    temp file or input stream
+     * @param recordPosition client record next append position
+     * @return the request
+     * @throws IOException any problem
+     */
+    static WriteFileRequest newAppendFileRequest(final OBSFileSystem owner, final String key, final long recordPosition,
+        final InputStream inputStream) {
+        Preconditions.checkNotNull(key);
+        Preconditions.checkNotNull(inputStream);
+        WriteFileRequest writeFileReq = new WriteFileRequest(owner.getBucket(), key, inputStream, recordPosition);
         writeFileReq.setAcl(owner.getCannedACL());
         return writeFileReq;
     }
@@ -1489,7 +1532,7 @@ public final class OBSCommonUtils {
     public static long getSleepTimeInMs(final int retryCount) {
         long sleepTime = OBSCommonUtils.retrySleepBaseTime * (long) ((int) Math.pow(
             OBSCommonUtils.VARIABLE_BASE_OF_POWER_FUNCTION, retryCount));
-        return sleepTime > OBSCommonUtils.retrySleepMaxTime ? OBSCommonUtils.retrySleepMaxTime : sleepTime;
+        return Math.min(sleepTime, OBSCommonUtils.retrySleepMaxTime);
     }
 
     public static void setMetricsAbnormalInfo(OBSFileSystem fs, OBSOperateAction opName, Exception exception) {
@@ -1560,8 +1603,26 @@ public final class OBSCommonUtils {
         return metadata.getAllMetadata();
     }
 
+    static Map<String, Object> getObjectMetadataheader(final OBSFileSystem fs, final String key) throws IOException {
+        GetObjectMetadataRequest req = new GetObjectMetadataRequest(fs.getBucket(), key);
+        ObjectMetadata metadata = getOBSInvoker().retryByMaxTime(OBSOperateAction.getObjectMetadata, key,
+                () -> fs.getObsClient().getObjectMetadata(req), true);
+        return metadata.getResponseHeaders();
+    }
+
+    static Map<String, Object> SetAccessLabel(final OBSFileSystem fs, final String key) throws IOException {
+        GetObjectMetadataRequest req = new GetObjectMetadataRequest(fs.getBucket(), key);
+        ObjectMetadata metadata = getOBSInvoker().retryByMaxTime(OBSOperateAction.getObjectMetadata, key,
+                () -> fs.getObsClient().getObjectMetadata(req), true);
+        return metadata.getResponseHeaders();
+    }
+
     static void setAccessControlAttrForFileStatus(final OBSFileSystem fs, final OBSFileStatus status,
         final Map<String, Object> objMeta) {
+        if(!fs.supportDisguisePermissionsMode() || objMeta.get("permission") == null || objMeta.get("user") == null || objMeta.get("group") == null){
+            LOG.debug("supportDisguisePermissionsMode is not open");
+            return;
+        }
         FsPermission fsPermission = null;
         try {
             fsPermission = Optional.ofNullable(objMeta.get("permission")).map(Object::toString)
